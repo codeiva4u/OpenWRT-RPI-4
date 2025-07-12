@@ -25,6 +25,7 @@ uci add_list system.ntp.server='sg.pool.ntp.org'
 uci commit system
 
 # network
+uci set network.globals.packet_steering='2' # set packet steering to "Enabled (all CPUs)"
 uci -q delete network.globals.ula_prefix # testing
 uci set network.lan.ipaddr="$lan_ip"
 uci set network.lan.ip6assign='64'
