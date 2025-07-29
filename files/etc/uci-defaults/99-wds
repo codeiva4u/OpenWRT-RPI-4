@@ -21,8 +21,8 @@ uci set system.@system[0].hostname="${model}-STA"
 uci set system.@system[0].zonename='Asia/Kuala Lumpur'
 uci set system.@system[0].timezone='<+08>-8'
 uci del system.ntp.server
-uci add_list system.ntp.server='my.pool.ntp.org'
-uci add_list system.ntp.server='sg.pool.ntp.org'
+uci add_list system.ntp.server='ntp1.sirim.my'
+uci add_list system.ntp.server='ntp2.sirim.my'
 uci commit system
 
 # network
