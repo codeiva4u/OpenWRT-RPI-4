@@ -1,0 +1,33 @@
+# Firewall configuration for Pure Bridge Mode
+
+config defaults
+	option syn_flood	'1'
+	option input		'ACCEPT'
+	option output		'ACCEPT'
+	option forward		'REJECT' # Default to REJECT for security, then open specific paths
+
+# LAN Zone: Unrestricted traffic for the bridge
+config zone
+	option name		'lan'
+	option network		'lan'
+	option input		'ACCEPT'
+	option output		'ACCEPT'
+	option forward		'ACCEPT' # Allow forwarding from LAN to other zones (like WAN)
+
+# WAN Zone: Contains all internet-facing interfaces
+config zone
+	option name		'wan'
+	list   network		'wan_poco'
+	list   network		'wan_oneplus'
+	list   network		'wan_usb_android'
+	list   network		'wan_usb_ios'
+	option input		'REJECT' # Block incoming traffic from WAN for security
+	option output		'ACCEPT'
+	option forward		'REJECT' # Block forwarding from WAN to LAN
+	option masq		'1'      # Enable NAT for all WAN interfaces
+	option mtu_fix		'1'
+
+# Allow forwarding from LAN to WAN
+config forwarding
+	option src		'lan'
+	option dest		'wan'

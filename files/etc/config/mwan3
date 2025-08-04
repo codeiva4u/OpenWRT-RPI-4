@@ -1,0 +1,60 @@
+# mwan3 configuration for multi-WAN load balancing
+
+config globals 'globals'
+	option mmx_mask '0x3F00'
+
+# Define the four WAN interfaces that mwan3 will manage
+config interface 'wan_poco'
+	option enabled '1'
+	list track_ip '8.8.8.8'
+	list track_ip '8.8.4.4'
+
+config interface 'wan_oneplus'
+	option enabled '1'
+	list track_ip '8.8.8.8'
+	list track_ip '8.8.4.4'
+
+config interface 'wan_usb_android'
+	option enabled '1'
+	list track_ip '1.1.1.1'
+	list track_ip '1.0.0.1'
+
+config interface 'wan_usb_ios'
+	option enabled '1'
+	list track_ip '1.1.1.1'
+	list track_ip '1.0.0.1'
+
+# Define members for each interface. Metric and weight control failover and load balancing.
+config member 'poco_member'
+	option interface 'wan_poco'
+	option metric '1' # Lower metric is higher priority
+	option weight '2' # Higher weight gets more traffic
+
+config member 'oneplus_member'
+	option interface 'wan_oneplus'
+	option metric '1'
+	option weight '2'
+
+config member 'android_member'
+	option interface 'wan_usb_android'
+	option metric '2' # Higher metric is lower priority
+	option weight '1'
+
+config member 'ios_member'
+	option interface 'wan_usb_ios'
+	option metric '2'
+	option weight '1'
+
+# Define a policy that uses all members for load balancing
+config policy 'balanced'
+	list use_member 'poco_member'
+	list use_member 'oneplus_member'
+	list use_member 'android_member'
+	list use_member 'ios_member'
+	option last_resort 'unreachable' # What to do if all members fail
+
+# Default rule to apply the 'balanced' policy to all traffic
+config rule 'default_rule'
+	option dest_ip '0.0.0.0/0'
+	option use_policy 'balanced'
+	option proto 'all'

@@ -1,0 +1,61 @@
+name: Build OpenWrt Firmware for Raspberry Pi 4
+
+on:
+  push:
+    branches:
+      - main # मुख्य शाखा में पुश होने पर स्वचालित रूप से बिल्ड करें
+  workflow_dispatch: # मैन्युअल रूप से ट्रिगर करने की अनुमति देता है
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download and setup OpenWrt ImageBuilder
+        run: |
+          IMAGEBUILDER_URL="https://downloads.openwrt.org/releases/23.05.3/targets/bcm27xx/bcm2711/openwrt-imagebuilder-23.05.3-bcm27xx-bcm2711.Linux-x86_64.tar.xz"
+          wget $IMAGEBUILDER_URL -O imagebuilder.tar.xz
+          tar -xJf imagebuilder.tar.xz
+          mv openwrt-imagebuilder-* openwrt-imagebuilder
+
+      - name: Prepare custom files
+        run: |
+          echo "Copying custom configuration files..."
+          mkdir -p openwrt-imagebuilder/files
+          cp -r files/* openwrt-imagebuilder/files/
+
+      - name: Build Firmware Image
+        run: |
+          cd openwrt-imagebuilder
+          
+          # अपनी आवश्यकताओं के अनुसार पैकेज अनुकूलित करें
+          PACKAGES="\
+            # USB Tethering for Android/iOS
+            kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-ipheth \
+            \
+            # Multi-WAN support
+            mwan3 luci-app-mwan3 \
+            \
+            # LuCI Web Interface with Argon Theme
+            luci luci-theme-argon \
+            \
+            # Root partition expansion
+            block-mount kmod-fs-ext4 e2fsprogs parted"
+
+          echo "Building image with profile 'rpi-4' and packages: $PACKAGES"
+          make image PROFILE="rpi-4" PACKAGES="$PACKAGES" FILES="files/"
+
+      - name: Create Release and Upload Firmware
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: openwrt-rpi4-${{ github.run_id }}
+          name: "OpenWrt Build ${{ github.run_id }}"
+          body: |
+            This is an automated build of OpenWrt for Raspberry Pi 4.
+            - **Triggered by:** ${{ github.event_name }}
+            - **Commit:** ${{ github.sha }}
+          files: openwrt-imagebuilder/bin/targets/bcm27xx/bcm2711/*.img.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
