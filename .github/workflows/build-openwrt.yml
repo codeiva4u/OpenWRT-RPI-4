@@ -9,9 +9,6 @@ on:
       - '.github/workflows/build-openwrt.yml'
       - '.config'
       - 'files/**'
-    paths-ignore:
-      # इन फ़ाइलों में बदलाव होने पर न चलाएँ
-      - 'README.md'
 
   workflow_dispatch:
 
