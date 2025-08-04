@@ -1,0 +1,25 @@
+# Default AdGuard Home configuration
+bind_host: 0.0.0.0
+bind_port: 5353
+auth_name: admin
+auth_pass: admin
+language: en
+rlimit_nofile: 0
+dns:
+  bootstrap_dns:
+    - 9.9.9.9
+    - 1.1.1.1
+  upstream_dns:
+    - https://dns.google/dns-query
+    - https://dns.cloudflare.com/dns-query
+  blocking_mode: nxdomain
+  blocked_response_ttl: 10
+  querylog_enabled: true
+  ratelimit: 20
+tls:
+  enabled: false
+filters:
+  - enabled: true
+    url: https://adguardteam.github.io/AdGuardSDNSFilter/filters/filter.txt
+    name: AdGuard DNS filter
+    id: 1
