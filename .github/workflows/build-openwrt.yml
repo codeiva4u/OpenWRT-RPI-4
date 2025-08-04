@@ -3,8 +3,8 @@ name: Build OpenWrt Firmware for Raspberry Pi 4
 on:
   push:
     branches:
-      - main # मुख्य शाखा में पुश होने पर स्वचालित रूप से बिल्ड करें
-  workflow_dispatch: # मैन्युअल रूप से ट्रिगर करने की अनुमति देता है
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -29,21 +29,7 @@ jobs:
       - name: Build Firmware Image
         run: |
           cd openwrt-imagebuilder
-          
-          # अपनी आवश्यकताओं के अनुसार पैकेज अनुकूलित करें
-          PACKAGES="\
-            # USB Tethering for Android/iOS
-            kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-ipheth \
-            \
-            # Multi-WAN support
-            mwan3 luci-app-mwan3 \
-            \
-            # LuCI Web Interface with Argon Theme
-            luci luci-theme-argon \
-            \
-            # Root partition expansion
-            block-mount kmod-fs-ext4 e2fsprogs parted"
-
+          PACKAGES="kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-ipheth mwan3 luci-app-mwan3 luci luci-theme-argon block-mount kmod-fs-ext4 e2fsprogs parted"
           echo "Building image with profile 'rpi-4' and packages: $PACKAGES"
           make image PROFILE="rpi-4" PACKAGES="$PACKAGES" FILES="files/"
 
