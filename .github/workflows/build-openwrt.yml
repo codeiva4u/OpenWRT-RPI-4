@@ -1,4 +1,4 @@
-name: Build OpenWrt Firmware using Lienol Action
+name: Build OpenWrt using N-l-i-t-u-s Action
 
 on:
   push:
@@ -8,24 +8,20 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build OpenWrt
-        uses: Lienol/actions-openwrt@main
+        uses: N-l-i-t-u-s/Actions-OpenWrt@main
         with:
-          openwrt_path: 'openwrt'
-          config_path: '.config'
-          diy_script_path: 'diy-part1.sh'
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          
-          # Lienol Action Specific Options
-          openwrt_repo: 'https://github.com/openwrt/openwrt'
-          openwrt_branch: 'openwrt-23.05'
-          upload_artifact: true
-          upload_release: true
-          artifact_name: 'OpenWrt_Firmware'
-          release_name: 'OpenWrt Build ${{ env.DATE }}'
+          repository: openwrt/openwrt
+          branch: openwrt-23.05
+          target: bcm27xx
+          subtarget: bcm2711
+          config: .config
+          feeds: 'src-git jerrykuku https://github.com/jerrykuku/openwrt-package'
+          diy: './diy-part1.sh' # This is not used by this action, but kept for reference
+          token: ${{ secrets.GITHUB_TOKEN }}
