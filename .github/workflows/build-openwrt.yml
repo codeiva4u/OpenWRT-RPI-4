@@ -5,9 +5,14 @@ on:
     branches:
       - main
     paths:
+      # केवल इन फ़ाइलों/फ़ोल्डरों में बदलाव होने पर ही चलाएँ
       - '.github/workflows/build-openwrt.yml'
       - '.config'
       - 'files/**'
+    paths-ignore:
+      # इन फ़ाइलों में बदलाव होने पर न चलाएँ
+      - 'README.md'
+
   workflow_dispatch:
 
 jobs:
