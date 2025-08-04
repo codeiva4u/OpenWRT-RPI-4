@@ -20,6 +20,11 @@ jobs:
           tar -xJf imagebuilder.tar.xz
           mv openwrt-imagebuilder-* openwrt-imagebuilder
 
+      - name: Add Argon Theme
+        run: |
+          mkdir -p openwrt-imagebuilder/packages
+          git clone https://github.com/jerrykuku/luci-theme-argon.git openwrt-imagebuilder/packages/luci-theme-argon
+
       - name: Prepare custom files
         run: |
           echo "Copying custom configuration files..."
