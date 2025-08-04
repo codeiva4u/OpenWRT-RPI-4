@@ -25,7 +25,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Run OpenWrt Build Action
-      uses: P3TERX/Actions-OpenWrt@v2.1
+      uses: P3TERX/Actions-OpenWrt@v2
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         config_file: ${{ env.CONFIG_FILE }}
