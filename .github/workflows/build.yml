@@ -159,7 +159,7 @@ jobs:
 
           # Use GitHub Actions environment variables
           GITHUB_REPO="${GITHUB_REPOSITORY}"
-          RELEASE_TAG="${{ github.event.inputs.model }}-${{ env.openwrt_version }}-${{ env.commit_hash }}"
+          RELEASE_NAME="${{ github.event.inputs.model }}-${{ env.openwrt_version }}-${{ env.commit_hash }}"
 
           # Create build info markdown file
           cat <<EOF > build_info.md
@@ -177,7 +177,7 @@ jobs:
 
           | 🔐 SHA256 Checksum |
           |:-------------------|
-          $(awk -v repo="$GITHUB_REPO" -v tag="$RELEASE_TAG" '$2 ~ /(sysupgrade|factory|recovery)\.bin$/ {
+          $(awk -v repo="$GITHUB_REPO" -v tag="$RELEASE_NAME" '$2 ~ /(sysupgrade|factory|recovery)\.bin$/ {
             gsub(/\*/, "", $2); 
             printf "| `%s`<br>[%s](https://github.com/%s/releases/download/%s/%s) |\n", $1, $2, repo, tag, $2
           }' "$target_dir/sha256sums")
