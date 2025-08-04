@@ -7,12 +7,14 @@ config interface 'loopback'
 config globals 'globals'
 	option ula_prefix 'auto'
 
-# LAN Bridge (Pure Bridge Mode, No NAT)
+# LAN Bridge
 config interface 'lan'
 	option type 'bridge'
-	option proto 'none' # 'none' or 'unmanaged' for pure bridge
+	option proto 'static'
+	option ipaddr '192.168.2.1'
+	option netmask '255.255.255.0'
+	option ip6assign '60'
 	option device 'br-lan'
-	option delegate '0'
 
 config device
 	option name 'br-lan'
