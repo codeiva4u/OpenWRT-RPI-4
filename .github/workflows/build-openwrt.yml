@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/build-openwrt.yml'
+      - '.config'
+      - 'files/**'
   workflow_dispatch:
 
 jobs:
@@ -26,7 +30,6 @@ jobs:
 
       - name: Clone Argon Theme and Config App Directly
         run: |
-          # This is a more reliable method than using feeds
           cd openwrt
           mkdir -p package/luci-theme-argon
           mkdir -p package/luci-app-argon-config
