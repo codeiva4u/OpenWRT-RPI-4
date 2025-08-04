@@ -30,13 +30,16 @@ jobs:
       - name: Clone Latest OpenWrt Source Code (Master Branch)
         run: git clone https://github.com/openwrt/openwrt.git -b master openwrt
 
-      - name: Clone Argon Theme and Config App Directly
+      - name: Clone Custom LuCI Apps
         run: |
           cd openwrt
-          mkdir -p package/luci-theme-argon
-          mkdir -p package/luci-app-argon-config
+          # Argon Theme
           git clone https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
           git clone https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
+          # AdGuard Home
+          git clone https://github.com/openwrt/packages.git -b master --depth=1 packages-master
+          mv packages-master/net/adguardhome package/
+          rm -rf packages-master
           cd ..
 
       - name: Update and Install Feeds
