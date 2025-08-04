@@ -1,4 +1,4 @@
-name: Build OpenWrt Manually from Source
+name: Build OpenWrt Manually and Reliably
 
 on:
   push:
@@ -22,23 +22,27 @@ jobs:
           file wget
 
       - name: Clone OpenWrt Source Code
+        run: git clone https://github.com/openwrt/openwrt.git -b openwrt-23.05 openwrt
+
+      - name: Clone Argon Theme and Config App Directly
         run: |
-          git clone https://github.com/openwrt/openwrt.git -b openwrt-23.05 openwrt
+          # This is a more reliable method than using feeds
           cd openwrt
-          git pull
+          mkdir -p package/luci-theme-argon
+          mkdir -p package/luci-app-argon-config
+          git clone https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
+          git clone https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
+          cd ..
 
       - name: Update and Install Feeds
         working-directory: ./openwrt
         run: |
-          # Add the custom feed for Argon theme
-          echo "src-git jerrykuku https://github.com/jerrykuku/openwrt-package" >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Copy Custom Build Configuration
         run: |
           cp .config openwrt/.config
-          # Also copy our custom files to be included in the image
           mkdir -p openwrt/files
           cp -r files/* openwrt/files/
 
@@ -50,7 +54,7 @@ jobs:
 
       - name: Build The Firmware
         working-directory: ./openwrt
-        run: make -j$(nproc)
+        run: make -j$(nproc) || make -j1 V=s
 
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v1
