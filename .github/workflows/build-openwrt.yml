@@ -1,4 +1,4 @@
-name: Build OpenWrt Firmware using P3TERX Action
+name: Build OpenWrt Firmware using Lienol Action
 
 on:
   push:
@@ -6,31 +6,26 @@ on:
       - main
   workflow_dispatch:
 
-env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: openwrt-23.05
-  CONFIG_FILE: .config
-  DIY_P1_SH: diy-part1.sh
-  SSH_ACTIONS: false
-  UPLOAD_BIN_DIR: true
-  UPLOAD_FIRMWARE: true
-  TZ: Asia/Kolkata
-
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Run OpenWrt Build Action
-      uses: P3TERX/Actions-OpenWrt@v2
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        config_file: ${{ env.CONFIG_FILE }}
-        diy_script_1: ${{ env.DIY_P1_SH }}
-        ssh_actions: ${{ env.SSH_ACTIONS }}
-        upload_bin_dir: ${{ env.UPLOAD_BIN_DIR }}
-        upload_firmware: ${{ env.UPLOAD_FIRMWARE }}
-        tz: ${{ env.TZ }}
+      - name: Build OpenWrt
+        uses: Lienol/actions-openwrt@main
+        with:
+          openwrt_path: 'openwrt'
+          config_path: '.config'
+          diy_script_path: 'diy-part1.sh'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          
+          # Lienol Action Specific Options
+          openwrt_repo: 'https://github.com/openwrt/openwrt'
+          openwrt_branch: 'openwrt-23.05'
+          upload_artifact: true
+          upload_release: true
+          artifact_name: 'OpenWrt_Firmware'
+          release_name: 'OpenWrt Build ${{ env.DATE }}'
