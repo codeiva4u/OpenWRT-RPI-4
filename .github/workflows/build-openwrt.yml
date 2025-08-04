@@ -20,10 +20,11 @@ jobs:
           tar -xJf imagebuilder.tar.xz
           mv openwrt-imagebuilder-* openwrt-imagebuilder
 
-      - name: Add Argon Theme
+      - name: Add Argon Theme and Config App
         run: |
           mkdir -p openwrt-imagebuilder/packages
           git clone https://github.com/jerrykuku/luci-theme-argon.git openwrt-imagebuilder/packages/luci-theme-argon
+          git clone https://github.com/jerrykuku/luci-app-argon-config.git openwrt-imagebuilder/packages/luci-app-argon-config
 
       - name: Prepare custom files
         run: |
@@ -34,7 +35,7 @@ jobs:
       - name: Build Firmware Image
         run: |
           cd openwrt-imagebuilder
-          PACKAGES="kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-ipheth mwan3 luci-app-mwan3 luci luci-theme-argon block-mount kmod-fs-ext4 e2fsprogs parted"
+          PACKAGES="kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-ipheth mwan3 luci-app-mwan3 luci luci-theme-argon luci-app-argon-config block-mount kmod-fs-ext4 e2fsprogs parted"
           echo "Building image with profile 'rpi-4' and packages: $PACKAGES"
           make image PROFILE="rpi-4" PACKAGES="$PACKAGES" FILES="files/"
 
