@@ -1,0 +1,48 @@
+name: Build OpenWrt Image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up OpenWrt Image Builder
+        run: |
+          # This setup dynamically fetches the LATEST snapshot image builder for the target.
+          # Snapshots always contain the most recent code and features, fulfilling the auto-update requirement.
+          TARGET_DEVICE="bcm27xx-bcm2711"
+          IMAGE_BUILDER_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET_DEVICE}/openwrt-imagebuilder-${TARGET_DEVICE}.Linux-x86_64.tar.xz"
+          
+          echo "Downloading latest snapshot Image Builder from: ${IMAGE_BUILDER_URL}"
+          wget -O imagebuilder.tar.xz "${IMAGE_BUILDER_URL}"
+          tar -xJf imagebuilder.tar.xz
+          mv openwrt-imagebuilder-* openwrt-imagebuilder
+          cd openwrt-imagebuilder
+
+      - name: Prepare custom files
+        run: |
+          # Copy all custom configuration files to the image builder
+          cp -r $GITHUB_WORKSPACE/files ./openwrt-imagebuilder/
+
+      - name: Build custom OpenWrt image
+        run: |
+          cd openwrt-imagebuilder
+          
+          # Define packages to include
+          PACKAGES="luci luci-compat luci-lib-ipkg luci-theme-argon luci-app-argon-config mwan3 kmod-usb-net-ipheth usb-tethering kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-asix-ax88179 kmod-usb-net-rtl8152 wpa_supplicant-openssl"
+          
+          # Build the image for Raspberry Pi 4
+          make image PROFILE="rpi-4" PACKAGES="${PACKAGES}" FILES="files"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-image
+          path: openwrt-imagebuilder/bin/targets/bcm27xx/bcm2711/*.img.gz
