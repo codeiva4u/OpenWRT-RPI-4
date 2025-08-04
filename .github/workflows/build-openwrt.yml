@@ -1,4 +1,4 @@
-name: Build OpenWrt Firmware for Raspberry Pi 4
+name: Build OpenWrt Firmware using P3TERX Action
 
 on:
   push:
@@ -6,48 +6,31 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: openwrt-23.05
+  CONFIG_FILE: .config
+  DIY_P1_SH: diy-part1.sh
+  SSH_ACTIONS: false
+  UPLOAD_BIN_DIR: true
+  UPLOAD_FIRMWARE: true
+  TZ: Asia/Kolkata
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Download and setup OpenWrt ImageBuilder
-        run: |
-          IMAGEBUILDER_URL="https://downloads.openwrt.org/releases/23.05.3/targets/bcm27xx/bcm2711/openwrt-imagebuilder-23.05.3-bcm27xx-bcm2711.Linux-x86_64.tar.xz"
-          wget $IMAGEBUILDER_URL -O imagebuilder.tar.xz
-          tar -xJf imagebuilder.tar.xz
-          mv openwrt-imagebuilder-* openwrt-imagebuilder
-
-      - name: Add Argon Theme and Config App
-        run: |
-          mkdir -p openwrt-imagebuilder/packages
-          git clone https://github.com/jerrykuku/luci-theme-argon.git openwrt-imagebuilder/packages/luci-theme-argon
-          git clone https://github.com/jerrykuku/luci-app-argon-config.git openwrt-imagebuilder/packages/luci-app-argon-config
-
-      - name: Prepare custom files
-        run: |
-          echo "Copying custom configuration files..."
-          mkdir -p openwrt-imagebuilder/files
-          cp -r files/* openwrt-imagebuilder/files/
-
-      - name: Build Firmware Image
-        run: |
-          cd openwrt-imagebuilder
-          PACKAGES="kmod-usb-net-rndis kmod-usb-net-cdc-ether kmod-usb-net-ipheth mwan3 luci-app-mwan3 luci luci-theme-argon luci-app-argon-config block-mount kmod-fs-ext4 e2fsprogs parted"
-          echo "Building image with profile 'rpi-4' and packages: $PACKAGES"
-          make image PROFILE="rpi-4" PACKAGES="$PACKAGES" FILES="files/"
-
-      - name: Create Release and Upload Firmware
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: openwrt-rpi4-${{ github.run_id }}
-          name: "OpenWrt Build ${{ github.run_id }}"
-          body: |
-            This is an automated build of OpenWrt for Raspberry Pi 4.
-            - **Triggered by:** ${{ github.event_name }}
-            - **Commit:** ${{ github.sha }}
-          files: openwrt-imagebuilder/bin/targets/bcm27xx/bcm2711/*.img.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Run OpenWrt Build Action
+      uses: P3TERX/Actions-OpenWrt@v2.1
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        config_file: ${{ env.CONFIG_FILE }}
+        diy_script_1: ${{ env.DIY_P1_SH }}
+        ssh_actions: ${{ env.SSH_ACTIONS }}
+        upload_bin_dir: ${{ env.UPLOAD_BIN_DIR }}
+        upload_firmware: ${{ env.UPLOAD_FIRMWARE }}
+        tz: ${{ env.TZ }}
