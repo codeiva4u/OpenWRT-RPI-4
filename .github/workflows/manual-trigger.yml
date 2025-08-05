@@ -12,6 +12,11 @@ on:
         - fast
         - optimized
         - both
+      clean_build:
+        description: 'Force clean build (ignore all caches)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   trigger-builds:
@@ -29,17 +34,6 @@ jobs:
               workflow_id: 'fast-build.yml'
             });
 
-      - name: Trigger Optimized Build  
-        if: ${{ github.event.inputs.build_type == 'optimized' || github.event.inputs.build_type == 'both' }}
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GH_TOKEN }}
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'build-openwrt.yml'
-            });
 
       - name: Success Message
         run: |

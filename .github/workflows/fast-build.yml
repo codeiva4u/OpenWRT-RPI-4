@@ -1,15 +1,35 @@
-name: Ultra-Fast OpenWrt Build
+name: 🚀 Default Fast OpenWrt Build
 
 on:
+  # Auto trigger on push to main branch
   push:
     branches:
       - main
+    # Trigger on any important file changes
     paths:
       - '.github/workflows/fast-build.yml'
       - '.config'
       - 'files/**'
+      - '*.md'  # Documentation changes
+      - 'scripts/**'  # Script changes
 
+  # Manual trigger with options
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Force clean build (ignore cache)'
+        required: false
+        default: 'false'
+        type: boolean
+      build_target:
+        description: 'Build target (optional)'
+        required: false
+        default: 'bcm27xx/bcm2711'
+        type: string
+
+  # Auto trigger on schedule (weekly)
+  schedule:
+    - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
 
 env:
   OPENWRT_VERSION: "23.05"
@@ -68,8 +88,14 @@ jobs:
           ccache --max-size=2G
           ccache --zero-stats
 
-      - name: Clone OpenWrt Source (if not cached)
-        if: steps.cache-source.outputs.cache-hit != 'true'
+      - name: Clean existing source (if clean build requested)
+        if: github.event.inputs.clean_build == 'true'
+        run: |
+          rm -rf openwrt
+          echo "🧹 Cleaned existing OpenWrt source for fresh build"
+
+      - name: Clone OpenWrt Source (if not cached or clean build)
+        if: steps.cache-source.outputs.cache-hit != 'true' || github.event.inputs.clean_build == 'true'
         run: |
           git clone https://github.com/openwrt/openwrt.git -b v${{ env.OPENWRT_VERSION }} openwrt --depth=1
 
