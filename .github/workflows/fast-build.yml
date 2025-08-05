@@ -32,9 +32,8 @@ on:
     - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
 
 env:
-  OPENWRT_BRANCH: "openwrt-23.05"
-  OPENWRT_VERSION: "23.05"
-  CACHE_VERSION: "v2"
+  OPENWRT_BRANCH: "master"
+  CACHE_VERSION: "v3"  # Updated cache version for latest builds
 
 jobs:
   build:
@@ -52,9 +51,9 @@ jobs:
         uses: actions/cache@v3
         with:
           path: openwrt
-          key: ${{ runner.os }}-openwrt-source-${{ env.OPENWRT_VERSION }}-${{ env.CACHE_VERSION }}
+          key: ${{ runner.os }}-openwrt-source-master-${{ env.CACHE_VERSION }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-source-${{ env.OPENWRT_VERSION }}-
+            ${{ runner.os }}-openwrt-source-master-
             ${{ runner.os }}-openwrt-source-
 
       - name: Cache Build Tools
@@ -98,7 +97,14 @@ jobs:
       - name: Clone OpenWrt Source (if not cached or clean build)
         if: steps.cache-source.outputs.cache-hit != 'true' || github.event.inputs.clean_build == 'true'
         run: |
-          git clone https://github.com/openwrt/openwrt.git -b ${{ env.OPENWRT_BRANCH }} openwrt --depth=1
+          git clone https://github.com/openwrt/openwrt.git openwrt --depth=1
+          
+      - name: Get OpenWrt Version Info
+        run: |
+          cd openwrt
+          OPENWRT_VERSION=$(git describe --tags --always)
+          echo "OPENWRT_VERSION=$OPENWRT_VERSION" >> $GITHUB_ENV
+          echo "📦 Building OpenWrt version: $OPENWRT_VERSION"
 
       - name: Setup Custom Packages
         run: |
@@ -163,10 +169,13 @@ jobs:
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: openwrt-rpi4-fast-${{ github.run_id }}
-          name: "OpenWrt RPi4 Fast Build - ${{ github.run_id }}"
+          tag_name: openwrt-rpi4-latest-${{ github.run_id }}
+          name: "OpenWrt RPi4 Latest Build - ${{ env.OPENWRT_VERSION }}"
           body: |
             ## 🚀 Ultra-Fast OpenWrt Build for Raspberry Pi 4
+            
+            **OpenWrt Version**: `${{ env.OPENWRT_VERSION }}` (Latest Master Branch)
+            **Build Date**: $(date +"%Y-%m-%d %H:%M:%S UTC")
             
             ### Features:
             - Multi-WAN Load Balancing (mwan3)
