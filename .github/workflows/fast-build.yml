@@ -32,6 +32,7 @@ on:
     - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
 
 env:
+  OPENWRT_BRANCH: "openwrt-23.05"
   OPENWRT_VERSION: "23.05"
   CACHE_VERSION: "v2"
 
@@ -97,7 +98,7 @@ jobs:
       - name: Clone OpenWrt Source (if not cached or clean build)
         if: steps.cache-source.outputs.cache-hit != 'true' || github.event.inputs.clean_build == 'true'
         run: |
-          git clone https://github.com/openwrt/openwrt.git -b v${{ env.OPENWRT_VERSION }} openwrt --depth=1
+          git clone https://github.com/openwrt/openwrt.git -b ${{ env.OPENWRT_BRANCH }} openwrt --depth=1
 
       - name: Setup Custom Packages
         run: |
