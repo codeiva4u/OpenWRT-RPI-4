@@ -79,6 +79,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: openwrt-rpi4-master-${{ github.run_id }}
-          files: openwrt/bin/targets/bcm27xx/bcm2711/openwrt-RPI4-factory.img.gz
+          files: openwrt/bin/targets/bcm27xx/bcm2711/openwrt-Rpi4-factory.img.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
