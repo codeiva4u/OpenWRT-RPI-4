@@ -1,0 +1,48 @@
+name: Manual Build Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Select build type'
+        required: true
+        default: 'fast'
+        type: choice
+        options:
+        - fast
+        - optimized
+        - both
+
+jobs:
+  trigger-builds:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Trigger Fast Build
+        if: ${{ github.event.inputs.build_type == 'fast' || github.event.inputs.build_type == 'both' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'fast-build.yml'
+            });
+
+      - name: Trigger Optimized Build  
+        if: ${{ github.event.inputs.build_type == 'optimized' || github.event.inputs.build_type == 'both' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build-openwrt.yml'
+            });
+
+      - name: Success Message
+        run: |
+          echo "✅ Workflow(s) triggered successfully!"
+          echo "Build type: ${{ github.event.inputs.build_type }}"
+          echo "Check Actions tab for build progress"

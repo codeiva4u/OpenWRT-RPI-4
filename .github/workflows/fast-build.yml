@@ -164,4 +164,4 @@ jobs:
             release/openwrt-rpi4-sysupgrade.img.gz
             release/build-info.txt
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
