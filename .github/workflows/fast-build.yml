@@ -147,24 +147,63 @@ jobs:
       - name: Show ccache statistics
         run: ccache --show-stats
 
+      - name: Debug Build Output
+        run: |
+          echo "🔍 Checking build output directories..."
+          find openwrt/bin -name "*.img.gz" -type f | head -10
+          echo "📂 Available target directories:"
+          ls -la openwrt/bin/targets/ || echo "No targets directory found"
+          ls -la openwrt/bin/targets/bcm27xx/ || echo "No bcm27xx directory found"
+          ls -la openwrt/bin/targets/bcm27xx/bcm2711/ || echo "No bcm2711 directory found"
+
       - name: Prepare Release Files
         run: |
           mkdir -p release
-          cd openwrt/bin/targets/bcm27xx/bcm2711/
           
-          # Copy main firmware file
-          cp *-squashfs-factory.img.gz ../../../../release/openwrt-rpi4-optimized.img.gz
+          # Find firmware files in build output
+          FIRMWARE_DIR=$(find openwrt/bin/targets -name "*rpi-4*" -type d | head -1)
+          if [ -z "$FIRMWARE_DIR" ]; then
+            FIRMWARE_DIR="openwrt/bin/targets/bcm27xx/bcm2711"
+          fi
           
-          # Copy sysupgrade file if available
-          if ls *-squashfs-sysupgrade.img.gz 1> /dev/null 2>&1; then
-            cp *-squashfs-sysupgrade.img.gz ../../../../release/openwrt-rpi4-sysupgrade.img.gz
+          echo "📂 Using firmware directory: $FIRMWARE_DIR"
+          ls -la "$FIRMWARE_DIR" || echo "Directory not found or empty"
+          
+          # Look for factory image
+          FACTORY_IMG=$(find "$FIRMWARE_DIR" -name "*squashfs-factory*.img.gz" | head -1)
+          if [ -n "$FACTORY_IMG" ]; then
+            cp "$FACTORY_IMG" release/openwrt-rpi4-optimized.img.gz
+            echo "✅ Factory image copied: $(basename $FACTORY_IMG)"
+          else
+            # Try alternative naming patterns
+            FACTORY_IMG=$(find "$FIRMWARE_DIR" -name "*squashfs*.img.gz" | head -1)
+            if [ -n "$FACTORY_IMG" ]; then
+              cp "$FACTORY_IMG" release/openwrt-rpi4-optimized.img.gz
+              echo "✅ Alternative factory image copied: $(basename $FACTORY_IMG)"
+            else
+              echo "❌ No factory image found!"
+              exit 1
+            fi
+          fi
+          
+          # Look for sysupgrade image
+          SYSUPGRADE_IMG=$(find "$FIRMWARE_DIR" -name "*sysupgrade*.img.gz" | head -1)
+          if [ -n "$SYSUPGRADE_IMG" ]; then
+            cp "$SYSUPGRADE_IMG" release/openwrt-rpi4-sysupgrade.img.gz
+            echo "✅ Sysupgrade image copied: $(basename $SYSUPGRADE_IMG)"
+          else
+            echo "⚠️ No sysupgrade image found"
           fi
           
           # Create build info
-          cd ../../../../
           echo "Build Date: $(date)" > release/build-info.txt
           echo "OpenWrt Version: ${{ env.OPENWRT_VERSION }}" >> release/build-info.txt
           echo "Build ID: ${{ github.run_id }}" >> release/build-info.txt
+          echo "Firmware Directory: $FIRMWARE_DIR" >> release/build-info.txt
+          
+          # List final release files
+          echo "📦 Final release files:"
+          ls -la release/
 
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v1
