@@ -9,7 +9,6 @@ config globals 'globals'
 
 # LAN Bridge
 config interface 'lan'
-	option type 'bridge'
 	option proto 'static'
 	option ipaddr '192.168.2.1'
 	option netmask '255.255.255.0'
@@ -20,6 +19,8 @@ config device
 	option name 'br-lan'
 	option type 'bridge'
 	list ports 'eth0'
+	option igmp_snooping '1'
+	option stp '1'
 	# WiFi interfaces will be added to this bridge in the wireless config
 
 # WAN Interface 1: WiFi Client "कौन सा POCO X6"

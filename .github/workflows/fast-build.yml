@@ -1,4 +1,4 @@
-name: 🚀 Default Fast OpenWrt Build
+name: 🚀 Ultra-Fast OpenWrt Build for Raspberry Pi 4
 
 on:
   # Auto trigger on push to main branch
@@ -33,7 +33,8 @@ on:
 
 env:
   OPENWRT_BRANCH: "master"
-  CACHE_VERSION: "v3"  # Updated cache version for latest builds
+  CACHE_VERSION: "v4"  # Updated cache version for faster builds
+  CCACHE_SIZE: "4G"  # Increased ccache size
 
 jobs:
   build:
@@ -45,10 +46,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Enhanced caching strategy
+      - name: Setup GitHub CLI
+        run: |
+          gh --version || echo "GitHub CLI not found, installing..."
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+          && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+          && sudo apt update \
+          && sudo apt install gh -y
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      # Enhanced caching strategy for maximum performance
       - name: Cache OpenWrt Source
         id: cache-source
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: openwrt
           key: ${{ runner.os }}-openwrt-source-master-${{ env.CACHE_VERSION }}
@@ -56,22 +69,33 @@ jobs:
             ${{ runner.os }}-openwrt-source-master-
             ${{ runner.os }}-openwrt-source-
 
-      - name: Cache Build Tools
-        uses: actions/cache@v3
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ env.CACHE_VERSION }}-${{ hashFiles('.config') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-ccache-
+
+      - name: Cache Build Tools & Dependencies
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache
             /var/cache/apt
+            ~/apt-cache
           key: ${{ runner.os }}-build-tools-${{ env.CACHE_VERSION }}
           restore-keys: |
             ${{ runner.os }}-build-tools-
 
       - name: Cache Downloaded Packages
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: openwrt/dl
           key: ${{ runner.os }}-dl-${{ hashFiles('.config') }}-${{ env.CACHE_VERSION }}
           restore-keys: |
+            ${{ runner.os }}-dl-${{ env.CACHE_VERSION }}-
             ${{ runner.os }}-dl-
 
       - name: Install Build Dependencies
@@ -84,9 +108,14 @@ jobs:
       # Setup ccache for faster compilation
       - name: Setup ccache
         run: |
+          mkdir -p ~/.ccache
           echo 'export PATH="/usr/lib/ccache:$PATH"' >> $GITHUB_ENV
-          ccache --max-size=2G
+          echo 'export CCACHE_DIR="$HOME/.ccache"' >> $GITHUB_ENV
+          ccache --max-size=${{ env.CCACHE_SIZE }}
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
           ccache --zero-stats
+          echo "🚀 ccache configured with ${{ env.CCACHE_SIZE }} cache"
 
       - name: Clean existing source (if clean build requested)
         if: github.event.inputs.clean_build == 'true'
@@ -161,81 +190,125 @@ jobs:
           mkdir -p release
           
           # Find firmware files in build output
-          FIRMWARE_DIR=$(find openwrt/bin/targets -name "*rpi-4*" -type d | head -1)
-          if [ -z "$FIRMWARE_DIR" ]; then
-            FIRMWARE_DIR="openwrt/bin/targets/bcm27xx/bcm2711"
-          fi
+          FIRMWARE_DIR="openwrt/bin/targets/bcm27xx/bcm2711"
           
           echo "📂 Using firmware directory: $FIRMWARE_DIR"
+          echo "🔍 All files in firmware directory:"
           ls -la "$FIRMWARE_DIR" || echo "Directory not found or empty"
           
-          # Look for factory image
-          FACTORY_IMG=$(find "$FIRMWARE_DIR" -name "*squashfs-factory*.img.gz" | head -1)
-          if [ -n "$FACTORY_IMG" ]; then
-            cp "$FACTORY_IMG" release/openwrt-rpi4-optimized.img.gz
-            echo "✅ Factory image copied: $(basename $FACTORY_IMG)"
-          else
-            # Try alternative naming patterns
+          # Find all .img.gz files for debugging
+          echo "🔍 All .img.gz files found:"
+          find "$FIRMWARE_DIR" -name "*.img.gz" -type f | while read file; do
+            echo "  - $(basename "$file")"
+          done
+          
+          # Look for factory image with multiple patterns
+          FACTORY_IMG=""
+          
+          # Try different naming patterns for factory image
+          for pattern in "*squashfs-factory*.img.gz" "*rpi-4*squashfs*.img.gz" "*openwrt*rpi*squashfs*.img.gz" "*bcm2711*squashfs*.img.gz"; do
+            FACTORY_IMG=$(find "$FIRMWARE_DIR" -name "$pattern" | head -1)
+            if [ -n "$FACTORY_IMG" ]; then
+              echo "✅ Factory image found with pattern '$pattern': $(basename "$FACTORY_IMG")"
+              break
+            fi
+          done
+          
+          # If no specific factory image, use any squashfs image
+          if [ -z "$FACTORY_IMG" ]; then
             FACTORY_IMG=$(find "$FIRMWARE_DIR" -name "*squashfs*.img.gz" | head -1)
             if [ -n "$FACTORY_IMG" ]; then
-              cp "$FACTORY_IMG" release/openwrt-rpi4-optimized.img.gz
-              echo "✅ Alternative factory image copied: $(basename $FACTORY_IMG)"
-            else
-              echo "❌ No factory image found!"
-              exit 1
+              echo "✅ Using squashfs image as factory: $(basename "$FACTORY_IMG")"
             fi
+          fi
+          
+          # Copy factory image or fail
+          if [ -n "$FACTORY_IMG" ]; then
+            cp "$FACTORY_IMG" release/openwrt-rpi4-factory.img.gz
+            echo "✅ Factory image copied as: openwrt-rpi4-factory.img.gz"
+          else
+            echo "❌ No factory image found! Available files:"
+            ls -la "$FIRMWARE_DIR"
+            exit 1
           fi
           
           # Look for sysupgrade image
           SYSUPGRADE_IMG=$(find "$FIRMWARE_DIR" -name "*sysupgrade*.img.gz" | head -1)
           if [ -n "$SYSUPGRADE_IMG" ]; then
             cp "$SYSUPGRADE_IMG" release/openwrt-rpi4-sysupgrade.img.gz
-            echo "✅ Sysupgrade image copied: $(basename $SYSUPGRADE_IMG)"
+            echo "✅ Sysupgrade image copied: $(basename "$SYSUPGRADE_IMG")"
           else
-            echo "⚠️ No sysupgrade image found"
+            echo "⚠️ No sysupgrade image found, but continuing..."
           fi
           
-          # Create build info
-          echo "Build Date: $(date)" > release/build-info.txt
+          # Create build info with more details
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          echo "Build Date: $BUILD_DATE" > release/build-info.txt
           echo "OpenWrt Version: ${{ env.OPENWRT_VERSION }}" >> release/build-info.txt
           echo "Build ID: ${{ github.run_id }}" >> release/build-info.txt
+          echo "Commit SHA: ${{ github.sha }}" >> release/build-info.txt
           echo "Firmware Directory: $FIRMWARE_DIR" >> release/build-info.txt
+          echo "Factory Image: $(basename "$FACTORY_IMG")" >> release/build-info.txt
+          if [ -n "$SYSUPGRADE_IMG" ]; then
+            echo "Sysupgrade Image: $(basename "$SYSUPGRADE_IMG")" >> release/build-info.txt
+          fi
           
           # List final release files
           echo "📦 Final release files:"
           ls -la release/
 
+      # Delete old releases to keep only latest ones
+      - name: Clean old releases
+        run: |
+          # Keep only the latest 5 releases
+          gh release list --limit 10 --json tagName --jq '.[5:][].tagName' | while read tag; do
+            if [[ "$tag" == openwrt-rpi4-* ]]; then
+              echo "🗑️ Deleting old release: $tag"
+              gh release delete "$tag" --yes || echo "Failed to delete $tag"
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        continue-on-error: true
+
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: openwrt-rpi4-latest-${{ github.run_id }}
-          name: "OpenWrt RPi4 Latest Build - ${{ env.OPENWRT_VERSION }}"
+          tag_name: openwrt-rpi4-$(date +"%Y%m%d-%H%M%S")-${{ github.run_id }}
+          name: "🚀 OpenWrt RPi4 Build - ${{ env.OPENWRT_VERSION }} ($(date +"%Y-%m-%d %H:%M"))"
           body: |
             ## 🚀 Ultra-Fast OpenWrt Build for Raspberry Pi 4
             
-            **OpenWrt Version**: `${{ env.OPENWRT_VERSION }}` (Latest Master Branch)
-            **Build Date**: $(date +"%Y-%m-%d %H:%M:%S UTC")
+            **OpenWrt Version**: `${{ env.OPENWRT_VERSION }}` (Latest Master Branch)  
+            **Build Date**: $(date +"%Y-%m-%d %H:%M:%S UTC")  
+            **Build ID**: `${{ github.run_id }}`  
+            **Commit**: `${{ github.sha }}`
             
-            ### Features:
-            - Multi-WAN Load Balancing (mwan3)
-            - AdGuard Home (DNS-based ad blocking)
-            - USB Tethering (Android & iOS)
-            - WiFi Client Mode
-            - Argon Theme
-            - Auto rootfs expansion
+            ### 🎆 Features:
+            - 🌐 Multi-WAN Load Balancing (mwan3)
+            - 🚫 AdGuard Home (DNS-based ad blocking)
+            - 📱 USB Tethering (Android & iOS)
+            - 📶 WiFi Client Mode
+            - 🎨 Argon Theme
+            - 📈 Auto rootfs expansion
             
-            ### Installation:
-            1. Download `openwrt-rpi4-optimized.img.gz`
+            ### 📥 Installation:
+            1. Download **`openwrt-rpi4-factory.img.gz`** (for fresh installations)
             2. Flash to SD card using Raspberry Pi Imager or Balena Etcher
-            3. Access via http://192.168.2.1
+            3. Insert SD card into Raspberry Pi 4 and power on
+            4. Access via http://192.168.2.1
             
-            ### Default Login:
-            - Username: root
-            - Password: (no password initially)
+            ### 🔄 Upgrade:
+            - Use **`openwrt-rpi4-sysupgrade.img.gz`** for upgrading existing OpenWrt installations
             
-            Build completed in approximately 10-15 minutes! 🎉
+            ### 🔑 Default Login:
+            - **Username**: `root`
+            - **Password**: (no password initially)
+            
+            ---
+            🏁 **Build completed in approximately 10-15 minutes!** 🎉
           files: |
-            release/openwrt-rpi4-optimized.img.gz
+            release/openwrt-rpi4-factory.img.gz
             release/openwrt-rpi4-sysupgrade.img.gz
             release/build-info.txt
         env:
