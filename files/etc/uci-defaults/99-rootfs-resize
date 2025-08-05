@@ -1,0 +1,21 @@
+#!/bin/sh
+# Auto-resize root partition on first boot
+
+# Check if already resized
+if [ ! -f /etc/rootfs_resized ]; then
+    # Find the root partition
+    ROOT_PART=$(findmnt -n -o SOURCE /)
+    ROOT_DEV=$(echo $ROOT_PART | sed 's/[0-9]*$//')
+    
+    # Resize partition using parted
+    if command -v parted >/dev/null 2>&1; then
+        parted -s $ROOT_DEV resizepart 2 100%
+        resize2fs $ROOT_PART
+        
+        # Mark as resized
+        touch /etc/rootfs_resized
+        logger "Root filesystem resized successfully"
+    fi
+fi
+
+exit 0
