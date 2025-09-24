@@ -1,0 +1,99 @@
+#!/bin/sh
+# Pure Bridge Mode Configuration - TRUE TRANSPARENT BRIDGE
+# Router के WAN port से Pi के LAN port through करने के लिए
+
+echo "🌉 Configuring Pure Bridge Mode (No NAT, No DHCP)"
+
+# Disable all existing network configurations
+uci delete network.lan.proto 2>/dev/null || true
+uci delete network.lan.ipaddr 2>/dev/null || true
+uci delete network.lan.netmask 2>/dev/null || true
+uci delete network.lan.gateway 2>/dev/null || true
+uci delete network.lan.dns 2>/dev/null || true
+
+# Configure LAN as pure bridge interface
+uci set network.lan=interface
+uci set network.lan.proto='none'
+uci set network.lan.type='bridge'
+uci set network.lan.auto='1'
+
+# Bridge all available interfaces
+uci delete network.lan.ports 2>/dev/null || true
+uci add_list network.lan.ports='eth0'      # Ethernet port
+
+# Add WiFi to bridge (optional - if you want WiFi clients to also bridge)
+uci add_list network.lan.ports='wlan0' 2>/dev/null || true
+
+# Completely disable DHCP server
+uci set dhcp.lan.ignore='1'
+uci set dhcp.lan.dhcpv4='disabled'
+uci set dhcp.lan.dhcpv6='disabled'
+uci set dhcp.lan.ra='disabled'
+
+# Disable DHCPv6 completely
+uci set dhcp.odhcpd.maindhcp='0'
+uci set dhcp.odhcpd.leasefile='/tmp/dhcp.leases'
+
+# Configure management access (केवल direct connection के लिए)
+# यह temporarily है, बाद में disable हो जाएगा
+uci set network.mgmt=interface
+uci set network.mgmt.proto='static'
+uci set network.mgmt.ipaddr='192.168.100.1'
+uci set network.mgmt.netmask='255.255.255.0'
+uci set network.mgmt.auto='0'
+
+# Disable firewall completely for true bridge
+uci set firewall.@defaults[0].input='ACCEPT'
+uci set firewall.@defaults[0].output='ACCEPT'
+uci set firewall.@defaults[0].forward='ACCEPT'
+uci set firewall.@defaults[0].disable_ipv6='0'
+
+# Remove all firewall zones
+while uci delete firewall.@zone[0] 2>/dev/null; do true; done
+while uci delete firewall.@forwarding[0] 2>/dev/null; do true; done
+while uci delete firewall.@rule[0] 2>/dev/null; do true; done
+
+# Configure WiFi as bridge member (if you want WiFi bridging)
+uci set wireless.default_radio0=wifi-iface
+uci set wireless.default_radio0.device='radio0'
+uci set wireless.default_radio0.network='lan'
+uci set wireless.default_radio0.mode='ap'
+uci set wireless.default_radio0.ssid='Bridge-WiFi'
+uci set wireless.default_radio0.encryption='psk2'
+uci set wireless.default_radio0.key='bridge123'
+uci set wireless.default_radio0.isolate='0'  # Important for bridging
+
+# Enable radio
+uci set wireless.radio0.disabled='0'
+uci set wireless.radio0.channel='auto'
+uci set wireless.radio0.htmode='HE20'
+uci set wireless.radio0.country='IN'
+
+# Disable unnecessary services for bridge mode
+/etc/init.d/odhcpd disable 2>/dev/null || true
+/etc/init.d/dnsmasq stop 2>/dev/null || true
+/etc/init.d/dnsmasq disable 2>/dev/null || true
+
+# Configure minimal web interface access
+# यह केवल emergency access के लिए है
+uci set uhttpd.main.listen_http='192.168.100.1:80'
+uci set uhttpd.main.listen_https='192.168.100.1:443'
+
+# Commit all changes
+uci commit network
+uci commit dhcp  
+uci commit firewall
+uci commit wireless
+uci commit uhttpd
+
+# Restart services
+/etc/init.d/network restart
+/etc/init.d/firewall restart 2>/dev/null || true
+/etc/init.d/uhttpd restart
+
+echo "✅ Pure Bridge Mode configured"
+echo "🌉 Pi is now a transparent bridge"
+echo "🔧 Emergency access: Connect directly and use http://192.168.100.1"
+echo "📡 Devices will get IP from main router's DHCP"
+
+logger "Bridge Mode: Configured as transparent bridge - No NAT, No local DHCP"

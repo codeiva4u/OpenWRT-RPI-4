@@ -1,0 +1,59 @@
+#!/bin/sh
+# Network configuration script - Set LAN IP to 192.168.1.1
+
+# Configure LAN interface
+uci set network.lan=interface
+uci set network.lan.proto='static'
+uci set network.lan.ipaddr='192.168.1.1'
+uci set network.lan.netmask='255.255.255.0'
+uci set network.lan.ip6assign='60'
+
+# Configure LAN physical interface
+uci set network.lan.type='bridge'
+uci set network.lan.ifname='eth0'
+
+# Enable DHCP on LAN
+uci set dhcp.lan=dhcp
+uci set dhcp.lan.interface='lan'
+uci set dhcp.lan.start='100'
+uci set dhcp.lan.limit='150'
+uci set dhcp.lan.leasetime='12h'
+uci set dhcp.lan.dhcpv4='server'
+uci set dhcp.lan.dhcpv6='server'
+uci set dhcp.lan.ra='server'
+
+# Configure WiFi AP (if needed)
+uci set wireless.default_radio0=wifi-iface
+uci set wireless.default_radio0.device='radio0'
+uci set wireless.default_radio0.network='lan'
+uci set wireless.default_radio0.mode='ap'
+uci set wireless.default_radio0.ssid='OpenWrt-RPI4'
+uci set wireless.default_radio0.encryption='psk2'
+uci set wireless.default_radio0.key='openwrt123'
+
+# Enable radio
+uci set wireless.radio0.disabled='0'
+uci set wireless.radio0.channel='6'
+uci set wireless.radio0.htmode='HT20'
+uci set wireless.radio0.country='US'
+
+# Configure firewall zones
+uci set firewall.@zone[0].name='lan'
+uci set firewall.@zone[0].input='ACCEPT'
+uci set firewall.@zone[0].output='ACCEPT'
+uci set firewall.@zone[0].forward='ACCEPT'
+uci set firewall.@zone[0].network='lan'
+
+# Enable Web interface access
+uci set uhttpd.main.listen_http='0.0.0.0:80'
+uci set uhttpd.main.listen_https='0.0.0.0:443'
+
+# Commit all changes
+uci commit
+
+# Restart services
+/etc/init.d/network restart
+/etc/init.d/uhttpd restart
+
+echo "Network configured - Web interface available at http://192.168.1.1"
+logger "Network configuration completed - LAN IP: 192.168.1.1"

@@ -1,0 +1,150 @@
+#!/bin/sh
+# Network Mode Selector Script
+# Router Mode या Bridge Mode choose करने के लिए
+
+# Check for mode selection file
+MODE_FILE="/etc/network_mode"
+DEFAULT_MODE="router"
+
+if [ -f "$MODE_FILE" ]; then
+    SELECTED_MODE=$(cat "$MODE_FILE" | tr -d '\n\r' | tr '[:upper:]' '[:lower:]')
+else
+    SELECTED_MODE="$DEFAULT_MODE"
+    echo "$DEFAULT_MODE" > "$MODE_FILE"
+fi
+
+echo "🔧 Network Mode Selector - Selected: $SELECTED_MODE"
+
+case "$SELECTED_MODE" in
+    "bridge")
+        echo "🌉 Configuring Pure Bridge Mode..."
+        
+        # Pure Bridge Mode Configuration
+        uci delete network.lan.proto 2>/dev/null || true
+        uci delete network.lan.ipaddr 2>/dev/null || true
+        uci delete network.lan.netmask 2>/dev/null || true
+        
+        # Configure as bridge
+        uci set network.lan=interface
+        uci set network.lan.proto='none'
+        uci set network.lan.type='bridge'
+        uci set network.lan.auto='1'
+        uci delete network.lan.ports 2>/dev/null || true
+        uci add_list network.lan.ports='eth0'
+        
+        # Disable DHCP completely
+        uci set dhcp.lan.ignore='1'
+        uci set dhcp.lan.dhcpv4='disabled'
+        uci set dhcp.lan.dhcpv6='disabled'
+        uci set dhcp.lan.ra='disabled'
+        
+        # Minimal management interface
+        uci set network.mgmt=interface
+        uci set network.mgmt.proto='static' 
+        uci set network.mgmt.ipaddr='192.168.100.1'
+        uci set network.mgmt.netmask='255.255.255.0'
+        uci set network.mgmt.auto='0'
+        
+        # Disable firewall zones
+        while uci delete firewall.@zone[0] 2>/dev/null; do true; done
+        while uci delete firewall.@forwarding[0] 2>/dev/null; do true; done
+        
+        # Configure web access for management
+        uci set uhttpd.main.listen_http='192.168.100.1:80'
+        uci set uhttpd.main.listen_https='192.168.100.1:443'
+        
+        echo "✅ Bridge Mode configured - Transparent bridge active"
+        echo "🔧 Management: http://192.168.100.1 (direct connection only)"
+        ;;
+        
+    "router"|*)
+        echo "🏠 Configuring Router Mode..."
+        
+        # Router Mode Configuration  
+        uci set network.lan=interface
+        uci set network.lan.proto='static'
+        uci set network.lan.ipaddr='192.168.1.1'
+        uci set network.lan.netmask='255.255.255.0'
+        uci set network.lan.type='bridge'
+        uci delete network.lan.ports 2>/dev/null || true
+        uci add_list network.lan.ports='eth0'
+        
+        # Enable DHCP server
+        uci set dhcp.lan.ignore='0'
+        uci set dhcp.lan.interface='lan'
+        uci set dhcp.lan.start='100'
+        uci set dhcp.lan.limit='150'
+        uci set dhcp.lan.leasetime='12h'
+        uci set dhcp.lan.dhcpv4='server'
+        uci set dhcp.lan.dhcpv6='server'
+        uci set dhcp.lan.ra='server'
+        
+        # Configure firewall zones
+        uci set firewall.@zone[0].name='lan'
+        uci set firewall.@zone[0].input='ACCEPT'
+        uci set firewall.@zone[0].output='ACCEPT'
+        uci set firewall.@zone[0].forward='ACCEPT'
+        uci set firewall.@zone[0].network='lan'
+        
+        # Standard web access
+        uci set uhttpd.main.listen_http='0.0.0.0:80'
+        uci set uhttpd.main.listen_https='0.0.0.0:443'
+        
+        echo "✅ Router Mode configured - Gateway active"
+        echo "🌐 Access: http://192.168.1.1"
+        ;;
+esac
+
+# WiFi Configuration (common for both modes)
+uci set wireless.default_radio0=wifi-iface
+uci set wireless.default_radio0.device='radio0'
+uci set wireless.default_radio0.network='lan'
+uci set wireless.default_radio0.mode='ap'
+uci set wireless.default_radio0.encryption='psk2'
+uci set wireless.default_radio0.key='openwrt123'
+
+if [ "$SELECTED_MODE" = "bridge" ]; then
+    uci set wireless.default_radio0.ssid='Bridge-WiFi'
+    uci set wireless.default_radio0.isolate='0'
+else
+    uci set wireless.default_radio0.ssid='OpenWrt-RPI4'  
+    uci set wireless.default_radio0.isolate='1'
+fi
+
+uci set wireless.radio0.disabled='0'
+uci set wireless.radio0.channel='6'
+uci set wireless.radio0.htmode='HE20'
+uci set wireless.radio0.country='IN'
+
+# Commit all changes
+uci commit network
+uci commit dhcp
+uci commit firewall
+uci commit wireless
+uci commit uhttpd
+
+# Restart services
+/etc/init.d/network restart
+/etc/init.d/firewall restart 2>/dev/null || true
+/etc/init.d/uhttpd restart
+
+echo "🎯 Mode: $SELECTED_MODE - Configuration completed!"
+logger "Network Mode Selector: Configured as $SELECTED_MODE mode"
+
+# Create mode switch instructions
+cat > /tmp/mode_switch_help.txt << 'EOF'
+🔄 Network Mode Switching Instructions:
+
+To switch modes, SSH into the device and run:
+
+For Bridge Mode (transparent, no NAT):
+echo "bridge" > /etc/network_mode && reboot
+
+For Router Mode (with DHCP, NAT):  
+echo "router" > /etc/network_mode && reboot
+
+Current mode can be checked with:
+cat /etc/network_mode
+EOF
+
+echo "📖 Mode switching instructions saved to /tmp/mode_switch_help.txt"

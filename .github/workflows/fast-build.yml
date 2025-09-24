@@ -1,7 +1,7 @@
-name: 🚀 Ultra-Fast OpenWrt Build for Raspberry Pi 4
+name: 🚀 Fast OpenWrt Build for Raspberry Pi 4 (Manual/Push)
 
 on:
-  # Auto trigger on push to main branch
+  # Auto trigger on push to main branch (except weekly auto-update commits)
   push:
     branches:
       - main
@@ -12,6 +12,9 @@ on:
       - 'files/**'
       - '*.md'  # Documentation changes
       - 'scripts/**'  # Script changes
+    # Exclude weekly auto-update commits to avoid duplicate builds
+    paths-ignore:
+      - '.openwrt-commit'
 
   # Manual trigger with options
   workflow_dispatch:
@@ -26,10 +29,11 @@ on:
         required: false
         default: 'bcm27xx/bcm2711'
         type: string
-
-  # Auto trigger on schedule (weekly)
-  schedule:
-    - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
+      use_latest_openwrt:
+        description: 'Use latest OpenWrt master (vs cached)'
+        required: false
+        default: 'true'
+        type: boolean
 
 env:
   OPENWRT_BRANCH: "master"

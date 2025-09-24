@@ -1,0 +1,341 @@
+name: 🔄 Weekly OpenWrt Auto-Update & Build
+
+on:
+  # Weekly check every Sunday at 2 AM UTC (7:30 AM IST)
+  schedule:
+    - cron: '0 2 * * 0'
+  
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no updates'
+        required: false
+        default: 'false'
+        type: boolean
+      check_branch:
+        description: 'OpenWrt branch to check'
+        required: false
+        default: 'master'
+        type: string
+
+env:
+  OPENWRT_REPO: "https://github.com/openwrt/openwrt.git"
+  OPENWRT_BRANCH: "master"
+  CACHE_VERSION: "v5"
+
+jobs:
+  check-updates:
+    name: 🔍 Check for OpenWrt Updates
+    runs-on: ubuntu-22.04
+    outputs:
+      has_updates: ${{ steps.check.outputs.has_updates }}
+      old_commit: ${{ steps.check.outputs.old_commit }}
+      new_commit: ${{ steps.check.outputs.new_commit }}
+      openwrt_version: ${{ steps.check.outputs.openwrt_version }}
+      update_summary: ${{ steps.check.outputs.update_summary }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for OpenWrt Updates
+        id: check
+        run: |
+          echo "🔍 Checking for OpenWrt updates..."
+          
+          # Get current commit from our build history (if any)
+          OLD_COMMIT=""
+          if [ -f ".openwrt-commit" ]; then
+            OLD_COMMIT=$(cat .openwrt-commit)
+            echo "📋 Last built commit: $OLD_COMMIT"
+          else
+            echo "📋 No previous build history found"
+          fi
+          
+          # Get latest commit from OpenWrt master branch
+          NEW_COMMIT=$(git ls-remote ${{ env.OPENWRT_REPO }} HEAD | cut -f1)
+          echo "🆕 Latest OpenWrt commit: $NEW_COMMIT"
+          
+          # Clone OpenWrt to get version info
+          git clone ${{ env.OPENWRT_REPO }} openwrt-temp --depth=1
+          cd openwrt-temp
+          OPENWRT_VERSION=$(git describe --tags --always)
+          echo "📦 OpenWrt Version: $OPENWRT_VERSION"
+          
+          # Get commit info and summary
+          COMMIT_DATE=$(git log -1 --format="%ci" $NEW_COMMIT)
+          COMMIT_AUTHOR=$(git log -1 --format="%an" $NEW_COMMIT)
+          COMMIT_MESSAGE=$(git log -1 --format="%s" $NEW_COMMIT)
+          
+          UPDATE_SUMMARY="**Latest Commit:** \`$NEW_COMMIT\`  
+          **Date:** $COMMIT_DATE  
+          **Author:** $COMMIT_AUTHOR  
+          **Message:** $COMMIT_MESSAGE"
+          
+          cd ..
+          rm -rf openwrt-temp
+          
+          # Check if we need to build
+          HAS_UPDATES="false"
+          if [ "$OLD_COMMIT" != "$NEW_COMMIT" ] || [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            HAS_UPDATES="true"
+            echo "✅ Updates found or force build requested"
+          else
+            echo "ℹ️ No updates found, skipping build"
+          fi
+          
+          # Set outputs
+          echo "has_updates=$HAS_UPDATES" >> $GITHUB_OUTPUT
+          echo "old_commit=$OLD_COMMIT" >> $GITHUB_OUTPUT
+          echo "new_commit=$NEW_COMMIT" >> $GITHUB_OUTPUT  
+          echo "openwrt_version=$OPENWRT_VERSION" >> $GITHUB_OUTPUT
+          echo "update_summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$UPDATE_SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  build:
+    name: 🚀 Build Updated OpenWrt
+    needs: check-updates
+    if: needs.check-updates.outputs.has_updates == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Update Build Commit Tracking
+        run: |
+          echo "${{ needs.check-updates.outputs.new_commit }}" > .openwrt-commit
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .openwrt-commit
+          git commit -m "📝 Update OpenWrt tracking commit to ${{ needs.check-updates.outputs.new_commit }}" || echo "No commit needed"
+
+      # Enhanced caching strategy
+      - name: Cache OpenWrt Source
+        id: cache-source
+        uses: actions/cache@v4
+        with:
+          path: openwrt
+          key: ${{ runner.os }}-openwrt-source-${{ needs.check-updates.outputs.new_commit }}-${{ env.CACHE_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-source-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-openwrt-source-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ env.CACHE_VERSION }}-${{ hashFiles('.config') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-ccache-
+
+      - name: Cache Downloaded Packages
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: ${{ runner.os }}-dl-${{ hashFiles('.config') }}-${{ env.CACHE_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-dl-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-dl-
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+          file wget ccache time
+
+      - name: Setup ccache
+        run: |
+          mkdir -p ~/.ccache
+          export PATH="/usr/lib/ccache:$PATH"
+          export CCACHE_DIR="$HOME/.ccache"
+          ccache --max-size=6G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --zero-stats
+          echo "🚀 ccache configured for weekly build"
+
+      - name: Clone Latest OpenWrt Source
+        if: steps.cache-source.outputs.cache-hit != 'true'
+        run: |
+          echo "🔄 Cloning OpenWrt commit: ${{ needs.check-updates.outputs.new_commit }}"
+          git clone ${{ env.OPENWRT_REPO }} openwrt --depth=1
+
+      - name: Update OpenWrt to Latest Commit
+        run: |
+          cd openwrt
+          git fetch origin
+          git checkout ${{ needs.check-updates.outputs.new_commit }}
+          echo "✅ Updated to commit: $(git rev-parse HEAD)"
+
+      - name: Setup Custom Packages & Themes
+        run: |
+          cd openwrt
+          
+          # Remove existing custom packages if present
+          rm -rf package/luci-theme-argon package/luci-app-argon-config
+          
+          # Clone latest versions
+          git clone https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon --depth=1
+          git clone https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config --depth=1
+          
+          # Update feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Copy Configuration & Custom Files
+        run: |
+          cp .config openwrt/.config
+          mkdir -p openwrt/files
+          cp -r files/* openwrt/files/ || echo "No custom files to copy"
+
+      - name: Configure Build
+        working-directory: ./openwrt
+        run: |
+          make defconfig
+          echo "📋 Final configuration applied"
+
+      - name: Download Packages
+        working-directory: ./openwrt
+        run: |
+          make download -j$(nproc)
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Build Firmware
+        working-directory: ./openwrt
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          echo "🔨 Starting build process..."
+          time make -j$(nproc) || make -j1 V=s
+
+      - name: Show Build Statistics
+        run: |
+          echo "📊 Build Statistics:"
+          ccache --show-stats
+          echo ""
+          echo "📁 Build Output:"
+          find openwrt/bin -name "*.img.gz" -type f
+
+      - name: Prepare Release Files
+        run: |
+          mkdir -p release
+          
+          FIRMWARE_DIR="openwrt/bin/targets/bcm27xx/bcm2711"
+          
+          # Find and copy firmware images
+          FACTORY_IMG=$(find "$FIRMWARE_DIR" -name "*squashfs-factory*.img.gz" -o -name "*squashfs*.img.gz" | head -1)
+          SYSUPGRADE_IMG=$(find "$FIRMWARE_DIR" -name "*sysupgrade*.img.gz" | head -1)
+          
+          if [ -n "$FACTORY_IMG" ]; then
+            cp "$FACTORY_IMG" release/openwrt-rpi4-factory.img.gz
+            echo "✅ Factory image: $(basename "$FACTORY_IMG")"
+          fi
+          
+          if [ -n "$SYSUPGRADE_IMG" ]; then
+            cp "$SYSUPGRADE_IMG" release/openwrt-rpi4-sysupgrade.img.gz
+            echo "✅ Sysupgrade image: $(basename "$SYSUPGRADE_IMG")"
+          fi
+          
+          # Create detailed build info
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          cat > release/build-info.txt << EOF
+          Weekly Auto-Build Information
+          =============================
+          Build Date: $BUILD_DATE
+          OpenWrt Version: ${{ needs.check-updates.outputs.openwrt_version }}
+          OpenWrt Commit: ${{ needs.check-updates.outputs.new_commit }}
+          Previous Commit: ${{ needs.check-updates.outputs.old_commit }}
+          Build Trigger: Weekly Auto-Update
+          Build ID: ${{ github.run_id }}
+          Repository: ${{ github.repository }}
+          
+          What's New:
+          ${{ needs.check-updates.outputs.update_summary }}
+          EOF
+
+      - name: Clean Old Releases
+        run: |
+          # Keep only the latest 3 weekly releases
+          gh release list --limit 10 --json tagName --jq '.[3:][].tagName' | while read tag; do
+            if [[ "$tag" == weekly-* ]]; then
+              echo "🗑️ Deleting old weekly release: $tag"
+              gh release delete "$tag" --yes || echo "Failed to delete $tag"
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Create Weekly Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: weekly-$(date +"%Y%m%d")-${{ github.run_id }}
+          name: "📅 Weekly OpenWrt Build - ${{ needs.check-updates.outputs.openwrt_version }} ($(date +\"%Y-%m-%d\"))"
+          body: |
+            ## 📅 Weekly Automated OpenWrt Build
+            
+            🤖 **Auto-built** with latest OpenWrt updates from upstream
+            
+            **📦 OpenWrt Version**: `${{ needs.check-updates.outputs.openwrt_version }}`  
+            **🕒 Build Date**: $(date +"%Y-%m-%d %H:%M:%S UTC")  
+            **🆔 Build ID**: `${{ github.run_id }}`  
+            **📝 OpenWrt Commit**: `${{ needs.check-updates.outputs.new_commit }}`
+
+            ### 🆕 What's New in This Build:
+            ${{ needs.check-updates.outputs.update_summary }}
+
+            ### 🎯 Features (All Fixed & Working):
+            - ✅ **Reliable Boot** - All essential packages included
+            - 🌐 **Web Interface** - Available at `http://192.168.1.1`
+            - 📈 **Auto SD Resize** - Full SD card utilization
+            - 🚫 **AdGuard Home** - Network-wide ad blocking
+            - 📱 **USB Tethering** - Android & iOS support
+            - 🔄 **Multi-WAN** - Load balancing support
+            - 🎨 **Argon Theme** - Modern web interface
+
+            ### 📥 Installation:
+            1. Download **`openwrt-rpi4-factory.img.gz`**
+            2. Flash to SD card using Raspberry Pi Imager
+            3. Boot Raspberry Pi 4
+            4. Access web interface: `http://192.168.1.1`
+            5. Login: `root` (no password initially)
+
+            ### 🔄 Upgrade:
+            - Use **`openwrt-rpi4-sysupgrade.img.gz`** for existing OpenWrt
+
+            ---
+            🤖 **Automatically built weekly when OpenWrt updates are available**
+          files: |
+            release/openwrt-rpi4-factory.img.gz
+            release/openwrt-rpi4-sysupgrade.img.gz
+            release/build-info.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Updated Tracking File
+        run: |
+          git push origin HEAD || echo "No changes to push"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-no-updates:
+    name: 📢 No Updates Notification  
+    needs: check-updates
+    if: needs.check-updates.outputs.has_updates == 'false'
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Log No Updates
+        run: |
+          echo "ℹ️ Weekly check completed - No OpenWrt updates available"
+          echo "📋 Current commit: ${{ needs.check-updates.outputs.old_commit }}"
+          echo "🔍 Latest commit: ${{ needs.check-updates.outputs.new_commit }}"
+          echo "✅ System is up-to-date!"

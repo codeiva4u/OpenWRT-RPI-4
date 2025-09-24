@@ -1,0 +1,2 @@
+# This file tracks the last built OpenWrt commit for weekly auto-updates
+# It will be automatically updated by the weekly-auto-build workflow
