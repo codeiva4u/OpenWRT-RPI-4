@@ -1,0 +1,88 @@
+#!/bin/sh
+# Auto-resize root partition on first boot - FIXED VERSION
+
+# Exit if already resized
+[ -f /etc/rootfs_resized ] && exit 0
+
+# Wait for system to stabilize
+sleep 5
+
+# Log function
+log_msg() {
+    echo "$1" | logger -t "rootfs-resize"
+    echo "$(date): $1" >> /tmp/resize.log
+}
+
+log_msg "Starting rootfs resize process"
+
+# Find the root partition more reliably
+ROOT_PART=$(df / | tail -1 | cut -d' ' -f1)
+if [ -z "$ROOT_PART" ]; then
+    ROOT_PART=$(findmnt -n -o SOURCE /)
+fi
+
+# Extract device and partition number
+ROOT_DEV=$(echo $ROOT_PART | sed 's/[0-9]*$//')
+PART_NUM=$(echo $ROOT_PART | sed 's/.*[^0-9]\([0-9]*\)$/\1/')
+
+log_msg "Root partition: $ROOT_PART (device: $ROOT_DEV, partition: $PART_NUM)"
+
+# Validate we found valid partition info
+if [ -z "$ROOT_DEV" ] || [ -z "$PART_NUM" ]; then
+    log_msg "ERROR: Could not determine root device or partition number"
+    exit 1
+fi
+
+# Check if parted is available
+if ! command -v parted >/dev/null 2>&1; then
+    log_msg "ERROR: parted command not found"
+    exit 1
+fi
+
+# Check if resize2fs is available  
+if ! command -v resize2fs >/dev/null 2>&1; then
+    log_msg "ERROR: resize2fs command not found"
+    exit 1
+fi
+
+# Get current partition size
+CURRENT_SIZE=$(parted -s $ROOT_DEV print | grep "^ *$PART_NUM" | awk '{print $4}')
+log_msg "Current partition size: $CURRENT_SIZE"
+
+# Resize partition to 100% of disk
+log_msg "Resizing partition $PART_NUM to 100%"
+if parted -s $ROOT_DEV resizepart $PART_NUM 100% 2>/tmp/parted.err; then
+    log_msg "Partition resize successful"
+    
+    # Sync filesystem changes
+    sync
+    sleep 2
+    
+    # Resize filesystem
+    log_msg "Resizing filesystem on $ROOT_PART"
+    if resize2fs $ROOT_PART 2>/tmp/resize2fs.err; then
+        log_msg "Filesystem resize successful"
+        
+        # Mark as completed
+        touch /etc/rootfs_resized
+        
+        # Get new size
+        NEW_SIZE=$(df -h / | tail -1 | awk '{print $2}')
+        log_msg "Root filesystem resized successfully to $NEW_SIZE"
+        
+        # Schedule reboot to ensure clean state
+        (sleep 10 && reboot) &
+        
+    else
+        log_msg "ERROR: Filesystem resize failed"
+        cat /tmp/resize2fs.err | logger -t "rootfs-resize-error"
+        exit 1
+    fi
+    
+else
+    log_msg "ERROR: Partition resize failed"
+    cat /tmp/parted.err | logger -t "rootfs-resize-error"
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,192 @@
+#!/bin/sh
+# SD Card Auto-Resize Script for OpenWRT
+# SD कार्ड को पूरी capacity में extend करने के लिए
+# Automatically resize rootfs partition to use full SD card space
+
+LOG_FILE="/var/log/rootfs_resize.log"
+RESIZE_FLAG="/etc/.rootfs_resized"
+
+# Logging function
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
+}
+
+# Check if resize already done
+if [ -f "$RESIZE_FLAG" ]; then
+    log_msg "💾 Rootfs already resized, skipping..."
+    exit 0
+fi
+
+log_msg "🚀 Starting SD Card Auto-Resize Process"
+
+# Get root device and partition number
+ROOT_DEV=$(findmnt -n -o SOURCE /)
+ROOT_DISK=$(echo "$ROOT_DEV" | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
+ROOT_PART_NUM=$(echo "$ROOT_DEV" | sed 's/.*p//' | sed 's/.*[^0-9]//')
+
+log_msg "📱 Root device: $ROOT_DEV"
+log_msg "💽 Root disk: $ROOT_DISK"
+log_msg "🔢 Partition number: $ROOT_PART_NUM"
+
+# Verify we're working with an SD card or USB device
+case "$ROOT_DISK" in
+    /dev/mmcblk*|/dev/sd*)
+        log_msg "✅ Valid storage device detected: $ROOT_DISK"
+        ;;
+    *)
+        log_msg "❌ Unknown storage device: $ROOT_DISK - aborting resize"
+        exit 1
+        ;;
+esac
+
+# Check available space
+TOTAL_SIZE=$(blockdev --getsize64 "$ROOT_DISK" 2>/dev/null)
+if [ -n "$TOTAL_SIZE" ]; then
+    TOTAL_GB=$((TOTAL_SIZE / 1024 / 1024 / 1024))
+    log_msg "💾 Total storage: ${TOTAL_GB}GB"
+else
+    log_msg "⚠️ Could not determine disk size"
+fi
+
+# Get current rootfs size
+CURRENT_SIZE=$(df -BG / | tail -1 | awk '{print $2}' | sed 's/G//')
+log_msg "📊 Current rootfs size: ${CURRENT_SIZE}GB"
+
+# Check if resize is needed (if less than 75% of total space)
+if [ -n "$TOTAL_GB" ] && [ -n "$CURRENT_SIZE" ]; then
+    THRESHOLD=$((TOTAL_GB * 75 / 100))
+    if [ "$CURRENT_SIZE" -gt "$THRESHOLD" ]; then
+        log_msg "✅ Rootfs already uses most available space (${CURRENT_SIZE}GB > ${THRESHOLD}GB threshold)"
+        touch "$RESIZE_FLAG"
+        exit 0
+    fi
+fi
+
+log_msg "🔧 Starting partition resize process..."
+
+# Use parted for partition manipulation
+if command -v parted >/dev/null 2>&1; then
+    log_msg "📐 Using parted for resizing"
+    
+    # Get partition information
+    PART_START=$(parted "$ROOT_DISK" unit s print | grep "^ $ROOT_PART_NUM" | awk '{print $2}' | sed 's/s//')
+    
+    if [ -n "$PART_START" ]; then
+        log_msg "📍 Partition starts at sector: $PART_START"
+        
+        # Remove the partition and recreate it with max size
+        parted -s "$ROOT_DISK" rm "$ROOT_PART_NUM"
+        if [ $? -eq 0 ]; then
+            log_msg "🗑️ Removed old partition $ROOT_PART_NUM"
+            
+            # Create new partition using all available space
+            parted -s "$ROOT_DISK" mkpart primary "${PART_START}s" 100%
+            if [ $? -eq 0 ]; then
+                log_msg "✅ Created new enlarged partition"
+            else
+                log_msg "❌ Failed to create new partition"
+                exit 1
+            fi
+        else
+            log_msg "❌ Failed to remove old partition"
+            exit 1
+        fi
+    else
+        log_msg "❌ Could not determine partition start sector"
+        exit 1
+    fi
+
+# Fallback to fdisk if parted not available
+elif command -v fdisk >/dev/null 2>&1; then
+    log_msg "📐 Using fdisk for resizing"
+    
+    # Get partition start sector using fdisk
+    PART_START=$(fdisk -l "$ROOT_DISK" | grep "$ROOT_DEV" | awk '{print $2}')
+    
+    if [ -n "$PART_START" ]; then
+        log_msg "📍 Partition starts at sector: $PART_START"
+        
+        # Use fdisk to resize
+        echo -e "d\n$ROOT_PART_NUM\nn\np\n$ROOT_PART_NUM\n$PART_START\n\nw" | fdisk "$ROOT_DISK"
+        if [ $? -eq 0 ]; then
+            log_msg "✅ Partition table updated with fdisk"
+        else
+            log_msg "❌ Failed to update partition table with fdisk"
+            exit 1
+        fi
+    else
+        log_msg "❌ Could not determine partition start with fdisk"
+        exit 1
+    fi
+else
+    log_msg "❌ Neither parted nor fdisk available - cannot resize partition"
+    exit 1
+fi
+
+# Inform kernel of partition changes
+log_msg "🔄 Informing kernel of partition changes..."
+partprobe "$ROOT_DISK" 2>/dev/null || true
+partx -u "$ROOT_DEV" 2>/dev/null || true
+
+# Wait a moment for kernel to process changes
+sleep 3
+
+# Resize the filesystem
+log_msg "📏 Resizing filesystem..."
+
+# Check filesystem type
+FS_TYPE=$(blkid -o value -s TYPE "$ROOT_DEV")
+log_msg "💽 Filesystem type: $FS_TYPE"
+
+case "$FS_TYPE" in
+    "ext4"|"ext3"|"ext2")
+        # Force filesystem check first
+        e2fsck -f -y "$ROOT_DEV" 2>/dev/null || true
+        
+        # Resize ext filesystem
+        resize2fs "$ROOT_DEV"
+        if [ $? -eq 0 ]; then
+            log_msg "✅ Successfully resized ext filesystem"
+        else
+            log_msg "❌ Failed to resize ext filesystem"
+            exit 1
+        fi
+        ;;
+    "f2fs")
+        # Resize F2FS filesystem
+        resize.f2fs "$ROOT_DEV"
+        if [ $? -eq 0 ]; then
+            log_msg "✅ Successfully resized F2FS filesystem"
+        else
+            log_msg "❌ Failed to resize F2FS filesystem"
+            exit 1
+        fi
+        ;;
+    *)
+        log_msg "⚠️ Unknown filesystem type: $FS_TYPE - attempting generic resize"
+        resize2fs "$ROOT_DEV" 2>/dev/null || true
+        ;;
+esac
+
+# Verify the resize was successful
+sync
+sleep 2
+
+NEW_SIZE=$(df -BG / | tail -1 | awk '{print $2}' | sed 's/G//')
+log_msg "📊 New rootfs size: ${NEW_SIZE}GB (was ${CURRENT_SIZE}GB)"
+
+if [ "$NEW_SIZE" -gt "$CURRENT_SIZE" ]; then
+    GAINED=$((NEW_SIZE - CURRENT_SIZE))
+    log_msg "🎉 Successfully gained ${GAINED}GB of storage space!"
+    
+    # Create flag file to prevent re-running
+    touch "$RESIZE_FLAG"
+    echo "$(date): Rootfs resized from ${CURRENT_SIZE}GB to ${NEW_SIZE}GB" > "$RESIZE_FLAG"
+    
+    log_msg "✅ Rootfs resize completed successfully"
+    logger "OpenWRT: SD card rootfs resized from ${CURRENT_SIZE}GB to ${NEW_SIZE}GB"
+else
+    log_msg "⚠️ Filesystem size unchanged - resize may not have worked"
+fi
+
+log_msg "🏁 SD Card resize process finished"

@@ -1,0 +1,236 @@
+#!/bin/sh
+# Enhanced Network Mode Selector Script
+# नेटवर्क मोड सलेक्टर - एनहांस्ड वर्जन
+# Router Mode या Advanced Bridge Mode सिलेक्ट करने के लिए
+
+# Configuration paths
+MODE_FILE="/etc/network_mode"
+MOBILE_AUTOSTART="/etc/config/mobile_autostart"
+DEFAULT_MODE="router"
+
+# Check for startup service files
+MOBILE_HOTSPOT_SERVICE="/etc/init.d/mobile_hotspot_connect"
+USB_TETHERING_SERVICE="/etc/init.d/usb_tethering_detect"
+ADGUARD_SERVICE="/etc/init.d/adguardhome"
+
+# Service initialization
+init_services() {
+    # Create mobile hotspot service
+    if [ ! -f "$MOBILE_HOTSPOT_SERVICE" ]; then
+        echo "📱 Creating Mobile Hotspot auto-connect service..."
+        cat > "$MOBILE_HOTSPOT_SERVICE" << 'EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+PROG=/usr/bin/mobile-hotspot-connect
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$PROG" start
+    procd_set_param respawn 3600 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+EOF
+        chmod 755 "$MOBILE_HOTSPOT_SERVICE"
+        
+        # Create script symlink
+        ln -sf /etc/OpenWRT-RPI-4-main/mobile-hotspot-connect /usr/bin/mobile-hotspot-connect 2>/dev/null || true
+    fi
+    
+    # Create USB tethering service
+    if [ ! -f "$USB_TETHERING_SERVICE" ]; then
+        echo "📱 Creating USB Tethering auto-detect service..."
+        cat > "$USB_TETHERING_SERVICE" << 'EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+PROG=/usr/bin/usb-tethering-detect
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$PROG" start
+    procd_set_param respawn 3600 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+EOF
+        chmod 755 "$USB_TETHERING_SERVICE"
+        
+        # Create script symlink
+        ln -sf /etc/OpenWRT-RPI-4-main/usb-tethering-detect /usr/bin/usb-tethering-detect 2>/dev/null || true
+    fi
+    
+    # Create mobile autostart config if doesn't exist
+    if [ ! -f "$MOBILE_AUTOSTART" ]; then
+        cat > "$MOBILE_AUTOSTART" << 'EOF'
+# Mobile connectivity auto-start configuration
+ENABLE_MOBILE_HOTSPOT=1
+ENABLE_USB_TETHERING=1
+EOF
+    fi
+}
+
+# Check for mode selection file
+check_mode_file() {
+    if [ -f "$MODE_FILE" ]; then
+        SELECTED_MODE=$(cat "$MODE_FILE" | tr -d '\n\r' | tr '[:upper:]' '[:lower:]')
+    else
+        SELECTED_MODE="$DEFAULT_MODE"
+        echo "$DEFAULT_MODE" > "$MODE_FILE"
+    fi
+    
+    echo "🔧 Network Mode Selector - Selected: $SELECTED_MODE"
+}
+
+# Enable/disable mobile connectivity services
+manage_mobile_services() {
+    local mode="$1"
+    
+    # Load configuration
+    if [ -f "$MOBILE_AUTOSTART" ]; then
+        . "$MOBILE_AUTOSTART"
+    else
+        ENABLE_MOBILE_HOTSPOT=1
+        ENABLE_USB_TETHERING=1
+    fi
+    
+    # Mobile hotspot service
+    if [ -f "$MOBILE_HOTSPOT_SERVICE" ] && [ "$ENABLE_MOBILE_HOTSPOT" = "1" ]; then
+        if [ "$mode" = "advanced_bridge" ]; then
+            echo "📱 Enabling mobile hotspot auto-connect service"
+            /etc/init.d/mobile_hotspot_connect enable 2>/dev/null || true
+            /etc/init.d/mobile_hotspot_connect start 2>/dev/null || true
+        else
+            echo "📱 Disabling mobile hotspot service in router mode"
+            /etc/init.d/mobile_hotspot_connect stop 2>/dev/null || true
+            /etc/init.d/mobile_hotspot_connect disable 2>/dev/null || true
+        fi
+    fi
+    
+    # USB tethering service
+    if [ -f "$USB_TETHERING_SERVICE" ] && [ "$ENABLE_USB_TETHERING" = "1" ]; then
+        if [ "$mode" = "advanced_bridge" ]; then
+            echo "🔌 Enabling USB tethering auto-detect service"
+            /etc/init.d/usb_tethering_detect enable 2>/dev/null || true
+            /etc/init.d/usb_tethering_detect start 2>/dev/null || true
+        else
+            echo "🔌 Disabling USB tethering service in router mode"
+            /etc/init.d/usb_tethering_detect stop 2>/dev/null || true
+            /etc/init.d/usb_tethering_detect disable 2>/dev/null || true
+        fi
+    fi
+}
+
+# Configure AdGuard Home
+configure_adguard() {
+    local mode="$1"
+    
+    if [ ! -f "$ADGUARD_SERVICE" ]; then
+        return
+    fi
+    
+    if [ "$mode" = "router" ]; then
+        # Enable AdGuard in router mode
+        echo "🛡️ Configuring AdGuard Home for router mode"
+        /etc/init.d/adguardhome enable 2>/dev/null || true
+        
+        # Configure DNS in DHCP
+        uci set dhcp.@dnsmasq[0].port='5353'
+        uci set dhcp.@dnsmasq[0].noresolv='1'
+        uci set dhcp.@dnsmasq[0].rebind_protection='0'
+        
+        # Set AdGuard as upstream for dnsmasq
+        uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
+    else
+        # Disable AdGuard in bridge mode
+        echo "🛡️ Disabling AdGuard Home in bridge mode"
+        /etc/init.d/adguardhome stop 2>/dev/null || true
+        /etc/init.d/adguardhome disable 2>/dev/null || true
+        
+        # Reset dnsmasq settings
+        uci set dhcp.@dnsmasq[0].port='53'
+        uci set dhcp.@dnsmasq[0].noresolv='0'
+        uci delete dhcp.@dnsmasq[0].server 2>/dev/null || true
+    fi
+    
+    uci commit dhcp
+}
+
+# Main mode configuration function
+configure_mode() {
+    case "$SELECTED_MODE" in
+        "bridge"|"transparent"|"bridged")
+            echo "🌉 Configuring Basic Bridge Mode..."
+            /bin/sh /etc/OpenWRT-RPI-4-main/BRIDGE-MODE-99-network-config
+            ;;
+            
+        "advanced_bridge"|"smart_bridge"|"mobile_bridge")
+            echo "🚀 Configuring Advanced Bridge Mode with Mobile Support..."
+            /bin/sh /etc/OpenWRT-RPI-4-main/ADVANCED-BRIDGE-99-network-config
+            manage_mobile_services "advanced_bridge"
+            configure_adguard "bridge"
+            ;;
+            
+        "router"|"gateway"|*) 
+            echo "🌐 Configuring Router Mode..."
+            /bin/sh /etc/OpenWRT-RPI-4-main/FIXED-99-network-config
+            manage_mobile_services "router"
+            configure_adguard "router"
+            ;;
+    esac
+}
+
+# Create mode switching help file
+create_help_file() {
+    local help_file="/tmp/mode_switch_help.txt"
+    
+    cat > "$help_file" << 'EOF'
+📝 Network Mode Switching Instructions:
+
+To switch modes, SSH into the device and run:
+
+For Router Mode (standard NAT gateway):
+echo "router" > /etc/network_mode && reboot
+
+For Basic Bridge Mode (transparent bridge, no NAT):
+echo "bridge" > /etc/network_mode && reboot
+
+For Advanced Bridge Mode (with mobile connectivity):
+echo "advanced_bridge" > /etc/network_mode && reboot
+
+Current mode can be checked with:
+cat /etc/network_mode
+
+Mobile connectivity settings:
+Edit /etc/config/mobile_autostart to enable/disable auto-connectivity
+
+WiFi Hotspot Settings:
+Edit /etc/mobile_hotspots.conf to configure mobile hotspots
+EOF
+    
+    echo "📋 Mode switching instructions saved to $help_file"
+}
+
+# Main execution
+echo "🚀 Enhanced Network Mode Selector Starting..."
+
+# Initialize services
+init_services
+
+# Check mode file
+check_mode_file
+
+# Apply selected configuration
+configure_mode
+
+# Create help file
+create_help_file
+
+echo "✅ Network Mode Configuration Complete: $SELECTED_MODE"

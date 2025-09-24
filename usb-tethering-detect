@@ -1,0 +1,553 @@
+#!/bin/sh
+# USB Tethering Auto-Detection and Setup Service
+# USB टेथरिंग ऑटो-डिटेक्शन और सेटअप सर्विस
+# Automatically detects and configures USB tethered mobile devices
+
+SCRIPT_NAME="usb_tethering_detect"
+PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+LOG_FILE="/var/log/${SCRIPT_NAME}.log"
+CONFIG_FILE="/etc/usb_tethering.conf"
+CHECK_INTERVAL=10  # seconds
+DETECTED_DEVICES=""
+ACTIVE_CONNECTIONS=""
+
+# Logging function
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$$] $1" >> "$LOG_FILE"
+    echo "$1"
+}
+
+# Check if already running
+check_running() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            log_msg "⚠️ USB tethering service already running (PID: $pid)"
+            exit 1
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
+}
+
+# Create PID file
+create_pid() {
+    echo $$ > "$PID_FILE"
+    log_msg "🚀 USB tethering auto-detect service started (PID: $$)"
+}
+
+# Signal handler for clean exit
+cleanup() {
+    log_msg "🛑 USB tethering service stopping..."
+    cleanup_connections
+    rm -f "$PID_FILE"
+    exit 0
+}
+
+trap cleanup TERM INT
+
+# Initialize configuration
+init_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log_msg "📝 Creating USB tethering configuration..."
+        cat > "$CONFIG_FILE" << 'EOF'
+# USB Tethering Configuration
+# Automatic detection and configuration settings
+
+# Enable different types of USB tethering
+ENABLE_ANDROID=1
+ENABLE_IPHONE=1  
+ENABLE_RNDIS=1
+ENABLE_CDC_ETH=1
+ENABLE_NCM=1
+
+# Bridge mode integration
+AUTO_BRIDGE=1
+BRIDGE_INTERFACE=br_master
+
+# Network priority (higher = preferred)
+ANDROID_PRIORITY=90
+IPHONE_PRIORITY=85
+RNDIS_PRIORITY=80
+CDC_ETH_PRIORITY=75
+
+# Debug options
+VERBOSE_LOGGING=1
+EOF
+        chmod 644 "$CONFIG_FILE"
+        log_msg "📋 USB tethering config created at $CONFIG_FILE"
+    fi
+    
+    # Load configuration
+    . "$CONFIG_FILE"
+}
+
+# Load USB modules
+load_usb_modules() {
+    log_msg "🔌 Loading USB tethering kernel modules..."
+    
+    # Core USB modules
+    modprobe usbcore 2>/dev/null || true
+    modprobe usb_common 2>/dev/null || true
+    
+    # USB networking modules
+    modprobe usbnet 2>/dev/null || true
+    modprobe cdc_ether 2>/dev/null || true
+    modprobe cdc_ncm 2>/dev/null || true
+    modprobe rndis_host 2>/dev/null || true
+    modprobe cdc_mbim 2>/dev/null || true
+    
+    # iPhone tethering
+    modprobe ipheth 2>/dev/null || true
+    
+    # Serial modules for mobile dongles
+    modprobe usb_wwan 2>/dev/null || true
+    modprobe option 2>/dev/null || true
+    
+    log_msg "✅ USB modules loaded"
+}
+
+# Detect USB network devices
+detect_usb_devices() {
+    local devices=""
+    
+    # Check for USB network interfaces
+    for iface in /sys/class/net/*; do
+        if [ -d "$iface" ]; then
+            local ifname=$(basename "$iface")
+            local device_path="$iface/device"
+            
+            # Skip non-USB interfaces
+            if [ ! -L "$device_path" ]; then
+                continue
+            fi
+            
+            # Get USB device information
+            local usb_path=$(readlink -f "$device_path" 2>/dev/null)
+            if echo "$usb_path" | grep -q "/usb"; then
+                local vendor_id=""
+                local product_id=""
+                local manufacturer=""
+                local product=""
+                
+                # Try to get device details
+                if [ -f "${device_path}/../idVendor" ]; then
+                    vendor_id=$(cat "${device_path}/../idVendor" 2>/dev/null)
+                fi
+                if [ -f "${device_path}/../idProduct" ]; then
+                    product_id=$(cat "${device_path}/../idProduct" 2>/dev/null)
+                fi
+                if [ -f "${device_path}/../manufacturer" ]; then
+                    manufacturer=$(cat "${device_path}/../manufacturer" 2>/dev/null)
+                fi
+                if [ -f "${device_path}/../product" ]; then
+                    product=$(cat "${device_path}/../product" 2>/dev/null)
+                fi
+                
+                devices="$devices $ifname:$vendor_id:$product_id:$manufacturer:$product"
+                log_msg "🔍 Detected USB device: $ifname ($manufacturer $product)"
+            fi
+        fi
+    done
+    
+    echo "$devices"
+}
+
+# Identify device type
+identify_device_type() {
+    local device_info="$1"
+    local vendor_id=$(echo "$device_info" | cut -d: -f2)
+    local product_id=$(echo "$device_info" | cut -d: -f3)
+    local manufacturer=$(echo "$device_info" | cut -d: -f4)
+    local product=$(echo "$device_info" | cut -d: -f5)
+    
+    # Android devices (common vendor IDs)
+    case "$vendor_id" in
+        "18d1"|"04e8"|"22b8"|"19d2"|"12d1"|"2717"|"0bb4")
+            echo "android"
+            return 0
+            ;;
+    esac
+    
+    # iPhone/iPad (Apple)
+    if [ "$vendor_id" = "05ac" ]; then
+        echo "iphone"
+        return 0
+    fi
+    
+    # Check by product name
+    case "$product" in
+        *"Android"*|*"Galaxy"*|*"Pixel"*)
+            echo "android"
+            return 0
+            ;;
+        *"iPhone"*|*"iPad"*)
+            echo "iphone"
+            return 0
+            ;;
+        *"RNDIS"*)
+            echo "rndis"
+            return 0
+            ;;
+    esac
+    
+    # Default to generic
+    echo "generic"
+}
+
+# Configure USB tethering interface
+configure_usb_interface() {
+    local ifname="$1"
+    local device_type="$2"
+    local device_info="$3"
+    
+    log_msg "📱 Configuring $device_type tethering on $ifname"
+    
+    # Create UCI network interface
+    local uci_name="usb_${ifname}"
+    
+    uci set network.${uci_name}=interface
+    uci set network.${uci_name}.proto='dhcp'
+    uci set network.${uci_name}.ifname="$ifname"
+    uci set network.${uci_name}.auto='1'
+    uci set network.${uci_name}.defaultroute='1'
+    uci set network.${uci_name}.peerdns='1'
+    
+    # Device-specific configuration
+    case "$device_type" in
+        "android")
+            uci set network.${uci_name}.metric='90'
+            ;;
+        "iphone")
+            uci set network.${uci_name}.metric='85'
+            ;;
+        "rndis")
+            uci set network.${uci_name}.metric='80'
+            ;;
+        *)
+            uci set network.${uci_name}.metric='75'
+            ;;
+    esac
+    
+    uci commit network
+    
+    # Bring up interface
+    ifup "$uci_name"
+    
+    log_msg "✅ USB interface $ifname configured as $uci_name"
+    
+    # Wait for DHCP
+    local retry=0
+    while [ $retry -lt 15 ]; do
+        if ip addr show "$ifname" | grep -q "inet "; then
+            local ip=$(ip addr show "$ifname" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+            log_msg "🌐 $ifname got IP address: $ip"
+            
+            # Add to bridge if enabled and in bridge mode
+            if [ "$AUTO_BRIDGE" = "1" ] && is_bridge_mode; then
+                add_to_bridge "$ifname"
+            fi
+            
+            # Update routing
+            update_routing "$ifname" "$device_type"
+            
+            return 0
+        fi
+        sleep 2
+        retry=$((retry + 1))
+    done
+    
+    log_msg "⚠️ Failed to get IP on $ifname after 30 seconds"
+    return 1
+}
+
+# Check if system is in bridge mode
+is_bridge_mode() {
+    uci get network.br_master >/dev/null 2>&1
+}
+
+# Add interface to bridge
+add_to_bridge() {
+    local ifname="$1"
+    
+    if is_bridge_mode && [ "$AUTO_BRIDGE" = "1" ]; then
+        log_msg "🌉 Adding $ifname to bridge"
+        
+        # Add interface to bridge
+        brctl addif br-br_master "$ifname" 2>/dev/null || true
+        
+        # Enable forwarding on interface
+        echo 1 > "/proc/sys/net/ipv4/conf/$ifname/forwarding" 2>/dev/null || true
+        
+        log_msg "✅ $ifname added to bridge"
+    fi
+}
+
+# Update routing tables
+update_routing() {
+    local ifname="$1"
+    local device_type="$2"
+    
+    log_msg "🛣️ Updating routing for $ifname ($device_type)"
+    
+    # Add default route with appropriate metric
+    local metric=100
+    case "$device_type" in
+        "android") metric=90 ;;
+        "iphone") metric=85 ;;
+        "rndis") metric=80 ;;
+        *) metric=75 ;;
+    esac
+    
+    # Get gateway
+    local gateway=$(ip route | grep "$ifname.*scope link" | head -1 | awk '{print $1}' | cut -d/ -f1)
+    if [ -n "$gateway" ]; then
+        # Remove old default route for this interface
+        ip route del default dev "$ifname" 2>/dev/null || true
+        
+        # Add new default route
+        ip route add default via "$gateway" dev "$ifname" metric "$metric" 2>/dev/null || true
+        log_msg "✅ Added default route via $gateway on $ifname (metric: $metric)"
+    fi
+}
+
+# Remove USB interface configuration
+remove_usb_interface() {
+    local ifname="$1"
+    local uci_name="usb_${ifname}"
+    
+    log_msg "🗑️ Removing configuration for $ifname"
+    
+    # Remove from bridge if present
+    if is_bridge_mode; then
+        brctl delif br-br_master "$ifname" 2>/dev/null || true
+    fi
+    
+    # Bring down interface
+    ifdown "$uci_name" 2>/dev/null || true
+    
+    # Remove UCI configuration
+    uci delete network.${uci_name} 2>/dev/null || true
+    uci commit network
+    
+    log_msg "✅ Removed configuration for $ifname"
+}
+
+# Monitor existing connections
+monitor_connections() {
+    local current_devices=$(detect_usb_devices)
+    local removed_devices=""
+    
+    # Check for removed devices
+    for active in $ACTIVE_CONNECTIONS; do
+        local ifname=$(echo "$active" | cut -d: -f1)
+        local found=0
+        
+        for current in $current_devices; do
+            local current_ifname=$(echo "$current" | cut -d: -f1)
+            if [ "$ifname" = "$current_ifname" ]; then
+                found=1
+                break
+            fi
+        done
+        
+        if [ $found -eq 0 ]; then
+            removed_devices="$removed_devices $ifname"
+        fi
+    done
+    
+    # Remove disconnected devices
+    for ifname in $removed_devices; do
+        remove_usb_interface "$ifname"
+        log_msg "📱 USB device $ifname disconnected"
+    done
+    
+    # Update active connections list
+    ACTIVE_CONNECTIONS=""
+    for device in $current_devices; do
+        local ifname=$(echo "$device" | cut -d: -f1)
+        if ip addr show "$ifname" | grep -q "inet "; then
+            ACTIVE_CONNECTIONS="$ACTIVE_CONNECTIONS $device"
+        fi
+    done
+}
+
+# Main detection loop
+main_loop() {
+    log_msg "🔄 Starting USB tethering detection loop (interval: ${CHECK_INTERVAL}s)"
+    
+    while true; do
+        # Monitor existing connections
+        monitor_connections
+        
+        # Detect new devices
+        local devices=$(detect_usb_devices)
+        
+        for device in $devices; do
+            local ifname=$(echo "$device" | cut -d: -f1)
+            
+            # Skip if already configured
+            if echo "$ACTIVE_CONNECTIONS" | grep -q "$ifname:"; then
+                continue
+            fi
+            
+            # Skip if interface already has IP (manual configuration)
+            if ip addr show "$ifname" | grep -q "inet "; then
+                log_msg "📱 $ifname already configured manually, adding to active list"
+                ACTIVE_CONNECTIONS="$ACTIVE_CONNECTIONS $device"
+                continue
+            fi
+            
+            # Identify and configure new device
+            local device_type=$(identify_device_type "$device")
+            log_msg "🔍 New USB device detected: $ifname (type: $device_type)"
+            
+            # Check if this device type is enabled
+            local enabled=1
+            case "$device_type" in
+                "android") [ "$ENABLE_ANDROID" != "1" ] && enabled=0 ;;
+                "iphone") [ "$ENABLE_IPHONE" != "1" ] && enabled=0 ;;
+                "rndis") [ "$ENABLE_RNDIS" != "1" ] && enabled=0 ;;
+            esac
+            
+            if [ $enabled -eq 1 ]; then
+                if configure_usb_interface "$ifname" "$device_type" "$device"; then
+                    ACTIVE_CONNECTIONS="$ACTIVE_CONNECTIONS $device"
+                    log_msg "✅ Successfully configured USB tethering on $ifname"
+                else
+                    log_msg "❌ Failed to configure USB tethering on $ifname"
+                fi
+            else
+                log_msg "⏭️ Device type $device_type disabled in configuration"
+            fi
+        done
+        
+        # Log status
+        local active_count=$(echo "$ACTIVE_CONNECTIONS" | wc -w)
+        if [ $active_count -gt 0 ]; then
+            log_msg "📱 Active USB connections: $active_count"
+        fi
+        
+        sleep "$CHECK_INTERVAL"
+    done
+}
+
+# Cleanup all connections
+cleanup_connections() {
+    log_msg "🧹 Cleaning up USB tethering connections..."
+    
+    for device in $ACTIVE_CONNECTIONS; do
+        local ifname=$(echo "$device" | cut -d: -f1)
+        remove_usb_interface "$ifname"
+    done
+    
+    ACTIVE_CONNECTIONS=""
+}
+
+# Start function
+start() {
+    check_running
+    init_config
+    load_usb_modules
+    create_pid
+    
+    log_msg "📱 USB Tethering Auto-Detection Service Starting..."
+    log_msg "🔧 Configuration file: $CONFIG_FILE"
+    log_msg "📋 Log file: $LOG_FILE"
+    log_msg "⏰ Check interval: ${CHECK_INTERVAL}s"
+    
+    main_loop
+}
+
+# Stop function
+stop() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if kill "$pid" 2>/dev/null; then
+            log_msg "🛑 USB tethering service stopped (PID: $pid)"
+        fi
+        rm -f "$PID_FILE"
+    else
+        log_msg "⚠️ USB tethering service not running"
+    fi
+}
+
+# Status function
+status() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "✅ USB tethering service is running (PID: $pid)"
+            echo "📱 Active connections: $(echo "$ACTIVE_CONNECTIONS" | wc -w)"
+            echo "📋 Log file: $LOG_FILE"
+            return 0
+        else
+            echo "❌ PID file exists but process not running"
+            rm -f "$PID_FILE"
+            return 1
+        fi
+    else
+        echo "⭕ USB tethering service is not running"
+        return 1
+    fi
+}
+
+# List detected devices
+list_devices() {
+    echo "📱 Currently detected USB devices:"
+    local devices=$(detect_usb_devices)
+    
+    if [ -n "$devices" ]; then
+        for device in $devices; do
+            local ifname=$(echo "$device" | cut -d: -f1)
+            local vendor_id=$(echo "$device" | cut -d: -f2)
+            local product_id=$(echo "$device" | cut -d: -f3)
+            local manufacturer=$(echo "$device" | cut -d: -f4)
+            local product=$(echo "$device" | cut -d: -f5)
+            local device_type=$(identify_device_type "$device")
+            
+            echo "  🔌 $ifname: $manufacturer $product ($device_type)"
+            echo "     Vendor: $vendor_id, Product: $product_id"
+            
+            if ip addr show "$ifname" | grep -q "inet "; then
+                local ip=$(ip addr show "$ifname" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+                echo "     Status: ✅ Connected (IP: $ip)"
+            else
+                echo "     Status: ⏳ Configuring or inactive"
+            fi
+            echo ""
+        done
+    else
+        echo "  No USB network devices detected"
+    fi
+}
+
+# Command line interface
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        sleep 2
+        start
+        ;;
+    status)
+        status
+        ;;
+    list|devices)
+        list_devices
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|list}"
+        echo ""
+        echo "📱 USB Tethering Auto-Detection Service"
+        echo "🔧 Configure in: $CONFIG_FILE"
+        echo "📋 View logs: tail -f $LOG_FILE"
+        echo "📱 List devices: $0 list"
+        exit 1
+        ;;
+esac

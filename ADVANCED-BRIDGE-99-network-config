@@ -1,0 +1,244 @@
+#!/bin/sh
+# Advanced Bridge Mode Configuration with Mobile Connectivity
+# रास्पबेरी पाई 4 को Advanced Transparent Bridge बनाने के लिए
+# WiFi Bridging + Mobile Hotspot + USB Tethering Support
+
+echo "🌉 Advanced Bridge Mode - Transparent Bridge with Mobile Connectivity"
+echo "📱 Supporting WiFi + Mobile Hotspot + USB Tethering"
+
+# Backup existing configuration
+mkdir -p /etc/bridge_backup
+uci export network > /etc/bridge_backup/network.backup
+uci export wireless > /etc/bridge_backup/wireless.backup
+uci export dhcp > /etc/bridge_backup/dhcp.backup
+
+# ============================================================
+# STEP 1: Create Master Bridge Interface
+# ============================================================
+
+echo "🔧 Setting up Master Bridge Interface..."
+
+# Remove all existing network configurations
+uci delete network.lan 2>/dev/null || true
+uci delete network.wan 2>/dev/null || true
+uci delete network.wan6 2>/dev/null || true
+
+# Create master bridge interface
+uci set network.br_master=interface
+uci set network.br_master.proto='none'
+uci set network.br_master.type='bridge'
+uci set network.br_master.auto='1'
+uci set network.br_master.stp='1'        # Enable Spanning Tree Protocol
+uci set network.br_master.forward_delay='2'
+uci set network.br_master.hello_time='1'
+uci set network.br_master.max_age='20'
+
+# Add Ethernet port to bridge
+uci add_list network.br_master.ports='eth0'
+
+echo "✅ Master bridge interface created"
+
+# ============================================================
+# STEP 2: WiFi Bridge Configuration  
+# ============================================================
+
+echo "📡 Configuring WiFi Bridge Interface..."
+
+# Configure WiFi for bridging (Client + AP simultaneously)
+uci set wireless.radio0.disabled='0'
+uci set wireless.radio0.channel='auto'
+uci set wireless.radio0.htmode='HE40'
+uci set wireless.radio0.country='IN'
+uci set wireless.radio0.txpower='20'
+
+# WiFi Client interface for connecting to mobile hotspots
+uci set wireless.sta=wifi-iface
+uci set wireless.sta.device='radio0'
+uci set wireless.sta.network='br_master'
+uci set wireless.sta.mode='sta'
+uci set wireless.sta.disabled='1'     # Will be enabled by hotspot script
+
+# WiFi Access Point for devices to connect
+uci set wireless.ap=wifi-iface
+uci set wireless.ap.device='radio0'
+uci set wireless.ap.network='br_master'
+uci set wireless.ap.mode='ap'
+uci set wireless.ap.ssid='Pi-Bridge-WiFi'
+uci set wireless.ap.encryption='psk2'
+uci set wireless.ap.key='bridge@123'
+uci set wireless.ap.isolate='0'        # Important for bridging
+uci set wireless.ap.disabled='0'
+
+echo "✅ WiFi bridge configured"
+
+# ============================================================
+# STEP 3: USB Tethering Interfaces
+# ============================================================
+
+echo "📱 Configuring USB Tethering Interfaces..."
+
+# Generic USB network interfaces for tethering
+for i in 1 2 3; do
+    uci set network.usb${i}=interface
+    uci set network.usb${i}.proto='dhcp'
+    uci set network.usb${i}.ifname="usb${i}"
+    uci set network.usb${i}.auto='0'      # Will be auto-enabled by detection script
+done
+
+# RNDIS (Windows Mobile) interface
+uci set network.rndis=interface
+uci set network.rndis.proto='dhcp'
+uci set network.rndis.auto='0'
+
+# iPhone USB tethering
+uci set network.ipheth=interface
+uci set network.ipheth.proto='dhcp'
+uci set network.ipheth.auto='0'
+
+echo "✅ USB tethering interfaces configured"
+
+# ============================================================
+# STEP 4: Completely Disable DHCP/DNS Services
+# ============================================================
+
+echo "🚫 Disabling DHCP and local DNS services..."
+
+# Disable DHCP server completely
+uci set dhcp.lan.ignore='1'
+uci set dhcp.lan.dhcpv4='disabled'  
+uci set dhcp.lan.dhcpv6='disabled'
+uci set dhcp.lan.ra='disabled'
+
+# Disable DHCPv6
+uci set dhcp.odhcpd.maindhcp='0'
+
+# Stop and disable DHCP/DNS services
+/etc/init.d/odhcpd stop 2>/dev/null || true
+/etc/init.d/odhcpd disable 2>/dev/null || true
+/etc/init.d/dnsmasq stop 2>/dev/null || true  
+/etc/init.d/dnsmasq disable 2>/dev/null || true
+
+echo "✅ DHCP/DNS services disabled"
+
+# ============================================================
+# STEP 5: Firewall Configuration for Pure Bridge
+# ============================================================
+
+echo "🛡️ Configuring firewall for transparent bridge..."
+
+# Remove all existing firewall rules
+while uci delete firewall.@zone[0] 2>/dev/null; do true; done
+while uci delete firewall.@forwarding[0] 2>/dev/null; do true; done
+while uci delete firewall.@rule[0] 2>/dev/null; do true; done
+while uci delete firewall.@redirect[0] 2>/dev/null; do true; done
+
+# Set global firewall defaults for bridge mode
+uci set firewall.@defaults[0].input='ACCEPT'
+uci set firewall.@defaults[0].output='ACCEPT' 
+uci set firewall.@defaults[0].forward='ACCEPT'
+uci set firewall.@defaults[0].disable_ipv6='0'
+uci set firewall.@defaults[0].flow_offloading='1'
+uci set firewall.@defaults[0].flow_offloading_hw='1'
+
+# Create single zone for all bridge traffic
+uci add firewall zone
+uci set firewall.@zone[-1].name='bridge_zone'
+uci set firewall.@zone[-1].input='ACCEPT'
+uci set firewall.@zone[-1].output='ACCEPT'
+uci set firewall.@zone[-1].forward='ACCEPT'
+uci add_list firewall.@zone[-1].network='br_master'
+
+echo "✅ Firewall configured for bridge mode"
+
+# ============================================================
+# STEP 6: Management Interface (Emergency Access)
+# ============================================================
+
+echo "🔧 Setting up emergency management interface..."
+
+# Create management interface for emergency access
+uci set network.mgmt=interface
+uci set network.mgmt.proto='static'
+uci set network.mgmt.ipaddr='192.168.100.1'
+uci set network.mgmt.netmask='255.255.255.0'
+uci set network.mgmt.auto='0'          # Disabled by default
+
+# Configure web interface for management access
+uci set uhttpd.main.listen_http='192.168.100.1:80'
+uci set uhttpd.main.listen_https='192.168.100.1:443'
+
+echo "✅ Emergency management interface configured"
+
+# ============================================================
+# STEP 7: Bridge Traffic Optimization
+# ============================================================
+
+echo "⚡ Optimizing bridge traffic..."
+
+# Enable bridge netfilter if available
+echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || true
+echo 1 > /proc/sys/net/bridge/bridge-nf-call-ip6tables 2>/dev/null || true
+echo 1 > /proc/sys/net/bridge/bridge-nf-call-arptables 2>/dev/null || true
+
+# Optimize bridge forwarding
+echo 0 > /proc/sys/net/bridge/bridge-nf-filter-vlan-tagged 2>/dev/null || true
+echo 0 > /proc/sys/net/bridge/bridge-nf-filter-pppoe-tagged 2>/dev/null || true
+
+# Enable IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
+
+echo "✅ Bridge traffic optimized"
+
+# ============================================================
+# STEP 8: Commit and Apply Configuration
+# ============================================================
+
+echo "💾 Saving configuration..."
+
+# Commit all changes
+uci commit network
+uci commit wireless
+uci commit dhcp
+uci commit firewall
+uci commit uhttpd
+
+# Restart services in correct order
+echo "🔄 Restarting services..."
+/etc/init.d/network restart
+sleep 3
+/etc/init.d/firewall restart 2>/dev/null || true
+/etc/init.d/uhttpd restart
+sleep 2
+
+# Enable bridge interfaces
+ip link set dev br-br_master up 2>/dev/null || true
+brctl stp br-br_master on 2>/dev/null || true
+
+echo "✅ Advanced Bridge Mode Configuration Complete!"
+echo ""
+echo "🌉 BRIDGE STATUS:"
+echo "   • Transparent bridge active (No NAT/DHCP)"
+echo "   • WiFi AP: Pi-Bridge-WiFi (bridge@123)"
+echo "   • WiFi Client: Ready for mobile hotspot"
+echo "   • USB Tethering: Auto-detection enabled"
+echo "   • Management: 192.168.100.1 (emergency only)"
+echo ""
+echo "📱 MOBILE CONNECTIVITY:"
+echo "   • Mobile hotspot auto-connect will start"
+echo "   • USB tethering auto-detection running"
+echo "   • All traffic transparently bridged"
+echo ""
+echo "🔧 NEXT STEPS:"
+echo "   • Connect ethernet to main router"
+echo "   • Mobile devices will get IP from main DHCP"
+echo "   • For management: direct connect to 192.168.100.1"
+
+# Log configuration completion
+logger "Advanced Bridge Mode: Configured successfully with mobile connectivity support"
+
+# Start mobile connectivity scripts
+/etc/init.d/mobile_hotspot_connect start 2>/dev/null || true
+/etc/init.d/usb_tethering_detect start 2>/dev/null || true
+
+echo "🚀 Advanced Bridge Mode is now active!"

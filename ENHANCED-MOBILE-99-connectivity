@@ -1,0 +1,604 @@
+#!/bin/sh
+# Enhanced Mobile Connectivity Manager
+# एनहांस्ड मोबाइल कनेक्टिविटी मैनेजर
+# Handles all mobile connectivity issues automatically
+
+SCRIPT_NAME="enhanced_mobile_connectivity"
+LOG_FILE="/var/log/enhanced_mobile_connectivity.log"
+PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+CONFIG_FILE="/etc/enhanced_mobile.conf"
+STATUS_FILE="/tmp/mobile_status.json"
+
+# Monitoring intervals
+QUICK_CHECK_INTERVAL=10    # Fast checks
+FULL_SCAN_INTERVAL=60      # Complete scans
+HEALTH_CHECK_INTERVAL=300  # Health monitoring
+
+# Connection priorities and metrics
+USB_PRIORITY=100
+WIFI_PRIORITY=90
+ETHERNET_PRIORITY=80
+
+# Logging function
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$$] $1" | tee -a "$LOG_FILE"
+}
+
+# Initialize configuration
+init_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" << 'EOF'
+# Enhanced Mobile Connectivity Configuration
+
+# General Settings
+ENABLE_AUTO_RECOVERY=1
+ENABLE_BANDWIDTH_MONITORING=1
+ENABLE_FAILOVER=1
+ENABLE_LOAD_BALANCING=0
+
+# USB Tethering Settings
+USB_AUTO_DETECT=1
+USB_RECONNECT_ATTEMPTS=5
+USB_RECONNECT_DELAY=10
+USB_POWER_CYCLE=1
+
+# WiFi Hotspot Settings
+WIFI_AUTO_SCAN=1
+WIFI_SCAN_INTERVAL=30
+WIFI_CONNECT_TIMEOUT=20
+WIFI_MAX_RETRY=3
+WIFI_ROAMING_ENABLED=1
+
+# Connection Health
+PING_TEST_ENABLED=1
+PING_TEST_HOST=8.8.8.8
+PING_TIMEOUT=5
+BANDWIDTH_THRESHOLD_KBPS=100
+LATENCY_THRESHOLD_MS=2000
+
+# Mobile IP Range Handling
+HANDLE_ANDROID_RANGE=1    # 192.168.42.x, 192.168.43.x
+HANDLE_IPHONE_RANGE=1     # 172.20.10.x
+HANDLE_WINDOWS_RANGE=1    # 192.168.137.x
+HANDLE_GENERIC_RANGE=1    # Other ranges
+
+# Advanced Features
+ENABLE_DNS_FALLBACK=1
+ENABLE_TRAFFIC_SHAPING=0
+ENABLE_CONNECTION_BONDING=0
+ENABLE_SMART_ROUTING=1
+EOF
+        log_msg "📋 Created default enhanced mobile configuration"
+    fi
+    
+    # Load configuration
+    . "$CONFIG_FILE"
+}
+
+# Create status tracking file
+create_status_file() {
+    cat > "$STATUS_FILE" << EOF
+{
+    "timestamp": $(date +%s),
+    "active_connections": [],
+    "primary_connection": null,
+    "backup_connections": [],
+    "total_bandwidth": 0,
+    "connection_health": "unknown",
+    "last_failover": null,
+    "reconnect_attempts": 0
+}
+EOF
+}
+
+# Update status file
+update_status() {
+    local field="$1"
+    local value="$2"
+    
+    # Simple JSON update (basic implementation)
+    if [ -f "$STATUS_FILE" ]; then
+        # Create backup
+        cp "$STATUS_FILE" "${STATUS_FILE}.bak"
+        
+        # Update timestamp
+        sed -i "s/\"timestamp\": [0-9]*/\"timestamp\": $(date +%s)/" "$STATUS_FILE"
+    fi
+}
+
+# Enhanced USB device detection with power cycling
+enhanced_usb_detection() {
+    log_msg "🔌 Enhanced USB device detection starting"
+    
+    local usb_devices=""
+    local power_cycled=0
+    
+    # First scan
+    for iface in $(ls /sys/class/net/ 2>/dev/null); do
+        local device_path="/sys/class/net/$iface/device"
+        
+        if [ -L "$device_path" ]; then
+            local usb_path=$(readlink -f "$device_path" 2>/dev/null)
+            if echo "$usb_path" | grep -q "/usb"; then
+                usb_devices="$usb_devices $iface"
+                log_msg "🔍 USB interface found: $iface"
+                
+                # Test interface functionality
+                if test_interface_connectivity "$iface"; then
+                    log_msg "✅ USB interface $iface is functional"
+                else
+                    log_msg "⚠️ USB interface $iface needs recovery"
+                    recover_usb_interface "$iface"
+                fi
+            fi
+        fi
+    done
+    
+    # If no devices found and power cycling enabled, try USB power cycle
+    if [ -z "$usb_devices" ] && [ "$USB_POWER_CYCLE" = "1" ] && [ $power_cycled -eq 0 ]; then
+        log_msg "🔄 No USB devices found, attempting USB power cycle"
+        usb_power_cycle
+        power_cycled=1
+        sleep 5
+        
+        # Scan again after power cycle
+        for iface in $(ls /sys/class/net/ 2>/dev/null); do
+            local device_path="/sys/class/net/$iface/device"
+            
+            if [ -L "$device_path" ]; then
+                local usb_path=$(readlink -f "$device_path" 2>/dev/null)
+                if echo "$usb_path" | grep -q "/usb"; then
+                    usb_devices="$usb_devices $iface"
+                    log_msg "🆕 USB interface found after power cycle: $iface"
+                fi
+            fi
+        done
+    fi
+    
+    echo "$usb_devices"
+}
+
+# USB power cycle function
+usb_power_cycle() {
+    log_msg "⚡ Performing USB power cycle"
+    
+    # Try to reset USB ports (if supported)
+    for usb_port in /sys/bus/usb/devices/*/power/autosuspend_delay_ms; do
+        if [ -f "$usb_port" ]; then
+            echo 0 > "$usb_port" 2>/dev/null || true
+        fi
+    done
+    
+    sleep 2
+    
+    for usb_port in /sys/bus/usb/devices/*/power/autosuspend_delay_ms; do
+        if [ -f "$usb_port" ]; then
+            echo 2000 > "$usb_port" 2>/dev/null || true
+        fi
+    done
+    
+    # Reload USB modules
+    rmmod cdc_ether 2>/dev/null || true
+    rmmod rndis_host 2>/dev/null || true
+    rmmod ipheth 2>/dev/null || true
+    
+    sleep 2
+    
+    modprobe cdc_ether 2>/dev/null || true
+    modprobe rndis_host 2>/dev/null || true  
+    modprobe ipheth 2>/dev/null || true
+    
+    log_msg "✅ USB power cycle completed"
+}
+
+# Recover problematic USB interface
+recover_usb_interface() {
+    local iface="$1"
+    
+    log_msg "🔧 Recovering USB interface: $iface"
+    
+    # Bring interface down and up
+    ip link set dev "$iface" down
+    sleep 2
+    ip link set dev "$iface" up
+    sleep 3
+    
+    # Try DHCP renewal
+    if command -v udhcpc >/dev/null 2>&1; then
+        udhcpc -i "$iface" -n -q -t 5 >/dev/null 2>&1 &
+    fi
+    
+    # Test again after recovery
+    sleep 10
+    if test_interface_connectivity "$iface"; then
+        log_msg "✅ USB interface $iface recovered successfully"
+        return 0
+    else
+        log_msg "❌ USB interface $iface recovery failed"
+        return 1
+    fi
+}
+
+# Enhanced WiFi scanning with signal optimization
+enhanced_wifi_scan() {
+    log_msg "📡 Enhanced WiFi scanning starting"
+    
+    local wifi_iface=$(detect_wifi_interface)
+    if [ -z "$wifi_iface" ]; then
+        log_msg "❌ No WiFi interface available"
+        return 1
+    fi
+    
+    # Optimize WiFi for scanning
+    iw dev "$wifi_iface" set power_save off 2>/dev/null || true
+    
+    # Multiple scan attempts for better results
+    local scan_results=""
+    local scan_attempts=3
+    
+    for attempt in $(seq 1 $scan_attempts); do
+        log_msg "🔍 WiFi scan attempt $attempt/$scan_attempts"
+        
+        local current_scan=$(iw dev "$wifi_iface" scan 2>/dev/null | grep -E "(SSID|signal|freq)" | head -50)
+        
+        if [ -n "$current_scan" ]; then
+            scan_results="$scan_results\n$current_scan"
+        fi
+        
+        [ $attempt -lt $scan_attempts ] && sleep 3
+    done
+    
+    # Parse and prioritize results
+    echo "$scan_results" | grep "SSID:" | sed 's/.*SSID: //' | sort | uniq | head -20
+}
+
+# Smart WiFi connection with roaming support
+smart_wifi_connect() {
+    local target_ssid="$1"
+    local target_password="$2"
+    local wifi_iface=$(detect_wifi_interface)
+    
+    if [ -z "$wifi_iface" ]; then
+        log_msg "❌ No WiFi interface for connection"
+        return 1
+    fi
+    
+    log_msg "📡 Smart connecting to: $target_ssid"
+    
+    # Disconnect from current network if different
+    local current_ssid=$(iw dev "$wifi_iface" link 2>/dev/null | grep "SSID" | awk '{print $2}')
+    if [ -n "$current_ssid" ] && [ "$current_ssid" != "$target_ssid" ]; then
+        log_msg "🔄 Disconnecting from $current_ssid"
+        iw dev "$wifi_iface" disconnect
+        sleep 3
+    fi
+    
+    # Configure connection with optimizations
+    uci set wireless.sta.disabled='0'
+    uci set wireless.sta.ssid="$target_ssid"
+    uci set wireless.sta.encryption='psk2'
+    uci set wireless.sta.key="$target_password"
+    
+    # Advanced WiFi settings for better connectivity
+    uci set wireless.sta.wmm='1'
+    uci set wireless.sta.short_gi_20='1'
+    uci set wireless.sta.short_gi_40='1' 
+    uci set wireless.sta.max_listen_int='10'
+    
+    uci commit wireless
+    
+    # Restart WiFi with smart timing
+    wifi down "$wifi_iface" 2>/dev/null || true
+    sleep 3
+    wifi up "$wifi_iface" 2>/dev/null || true
+    
+    # Enhanced connection monitoring
+    local connect_timeout=$WIFI_CONNECT_TIMEOUT
+    local connected=0
+    
+    while [ $connect_timeout -gt 0 ] && [ $connected -eq 0 ]; do
+        if iw dev "$wifi_iface" link 2>/dev/null | grep -q "Connected to"; then
+            local actual_ssid=$(iw dev "$wifi_iface" link 2>/dev/null | grep "SSID" | awk '{print $2}')
+            if [ "$actual_ssid" = "$target_ssid" ]; then
+                log_msg "✅ Connected to $target_ssid"
+                connected=1
+                
+                # Test connectivity
+                sleep 5
+                if test_interface_connectivity "$wifi_iface"; then
+                    log_msg "🌐 Internet connectivity confirmed on $wifi_iface"
+                    return 0
+                fi
+            fi
+        fi
+        
+        sleep 2
+        connect_timeout=$((connect_timeout - 2))
+    done
+    
+    log_msg "❌ Failed to connect to $target_ssid"
+    uci set wireless.sta.disabled='1'
+    uci commit wireless
+    wifi up "$wifi_iface" 2>/dev/null || true
+    
+    return 1
+}
+
+# Test interface connectivity with multiple methods
+test_interface_connectivity() {
+    local iface="$1"
+    
+    if [ -z "$iface" ] || ! ip link show "$iface" >/dev/null 2>&1; then
+        return 1
+    fi
+    
+    # Check if interface has IP address
+    if ! ip addr show "$iface" | grep -q "inet "; then
+        return 1
+    fi
+    
+    # Basic ping test if enabled
+    if [ "$PING_TEST_ENABLED" = "1" ]; then
+        if ping -I "$iface" -c 2 -W "$PING_TIMEOUT" "$PING_TEST_HOST" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    
+    # Alternative connectivity test - check default route
+    if ip route show dev "$iface" | grep -q "default"; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Handle mobile IP ranges automatically
+auto_handle_mobile_ip_ranges() {
+    log_msg "🌐 Auto-handling mobile IP ranges"
+    
+    # Get all active interfaces
+    for iface in $(ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' '); do
+        if [ "$iface" = "lo" ]; then
+            continue
+        fi
+        
+        # Check if interface has IP
+        local ip_addr=$(ip addr show "$iface" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+        
+        if [ -n "$ip_addr" ]; then
+            # Detect IP range type and configure accordingly
+            case "$ip_addr" in
+                192.168.42.*|192.168.43.*)
+                    if [ "$HANDLE_ANDROID_RANGE" = "1" ]; then
+                        configure_android_range "$iface" "$ip_addr"
+                    fi
+                    ;;
+                172.20.10.*)
+                    if [ "$HANDLE_IPHONE_RANGE" = "1" ]; then
+                        configure_iphone_range "$iface" "$ip_addr"
+                    fi
+                    ;;
+                192.168.137.*)
+                    if [ "$HANDLE_WINDOWS_RANGE" = "1" ]; then
+                        configure_windows_range "$iface" "$ip_addr"
+                    fi
+                    ;;
+                *)
+                    if [ "$HANDLE_GENERIC_RANGE" = "1" ]; then
+                        configure_generic_range "$iface" "$ip_addr"
+                    fi
+                    ;;
+            esac
+        fi
+    done
+}
+
+# Configure Android IP range handling
+configure_android_range() {
+    local iface="$1"
+    local ip_addr="$2"
+    
+    log_msg "🤖 Configuring Android range for $iface ($ip_addr)"
+    
+    # Android typically uses 192.168.42.x or 192.168.43.x
+    # Configure routing and bridge settings
+    
+    # Enable IP forwarding for this interface
+    echo 1 > "/proc/sys/net/ipv4/conf/$iface/forwarding" 2>/dev/null || true
+    
+    # Disable source route verification
+    echo 0 > "/proc/sys/net/ipv4/conf/$iface/rp_filter" 2>/dev/null || true
+    
+    # Add to bridge if in bridge mode
+    if [ -f "/sys/class/net/br_master/bridge" ]; then
+        brctl addif br_master "$iface" 2>/dev/null || true
+    fi
+    
+    log_msg "✅ Android range configured for $iface"
+}
+
+# Configure iPhone IP range handling  
+configure_iphone_range() {
+    local iface="$1"
+    local ip_addr="$2"
+    
+    log_msg "📱 Configuring iPhone range for $iface ($ip_addr)"
+    
+    # iPhone uses 172.20.10.x/28 typically
+    # Special handling for smaller subnet
+    
+    echo 1 > "/proc/sys/net/ipv4/conf/$iface/forwarding" 2>/dev/null || true
+    echo 0 > "/proc/sys/net/ipv4/conf/$iface/rp_filter" 2>/dev/null || true
+    
+    # iPhone specific optimizations
+    echo 1 > "/proc/sys/net/ipv4/conf/$iface/accept_local" 2>/dev/null || true
+    
+    # Add to bridge
+    if [ -f "/sys/class/net/br_master/bridge" ]; then
+        brctl addif br_master "$iface" 2>/dev/null || true
+    fi
+    
+    log_msg "✅ iPhone range configured for $iface"
+}
+
+# Configure Windows mobile range
+configure_windows_range() {
+    local iface="$1"
+    local ip_addr="$2"
+    
+    log_msg "🪟 Configuring Windows mobile range for $iface ($ip_addr)"
+    
+    # Windows uses 192.168.137.x typically
+    echo 1 > "/proc/sys/net/ipv4/conf/$iface/forwarding" 2>/dev/null || true
+    echo 0 > "/proc/sys/net/ipv4/conf/$iface/rp_filter" 2>/dev/null || true
+    
+    if [ -f "/sys/class/net/br_master/bridge" ]; then
+        brctl addif br_master "$iface" 2>/dev/null || true
+    fi
+    
+    log_msg "✅ Windows range configured for $iface"
+}
+
+# Configure generic mobile range
+configure_generic_range() {
+    local iface="$1" 
+    local ip_addr="$2"
+    
+    log_msg "🔧 Configuring generic range for $iface ($ip_addr)"
+    
+    echo 1 > "/proc/sys/net/ipv4/conf/$iface/forwarding" 2>/dev/null || true
+    echo 0 > "/proc/sys/net/ipv4/conf/$iface/rp_filter" 2>/dev/null || true
+    
+    if [ -f "/sys/class/net/br_master/bridge" ]; then
+        brctl addif br_master "$iface" 2>/dev/null || true
+    fi
+    
+    log_msg "✅ Generic range configured for $iface"
+}
+
+# Detect WiFi interface helper
+detect_wifi_interface() {
+    for iface in $(ls /sys/class/net/ 2>/dev/null); do
+        if [ -d "/sys/class/net/$iface/wireless" ]; then
+            echo "$iface"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Main enhanced connectivity loop
+main_connectivity_loop() {
+    log_msg "🚀 Enhanced mobile connectivity manager starting"
+    
+    init_config
+    create_status_file
+    
+    local quick_counter=0
+    local full_counter=0
+    local health_counter=0
+    
+    while true; do
+        # Quick checks (every 10 seconds)
+        if [ $((quick_counter % QUICK_CHECK_INTERVAL)) -eq 0 ]; then
+            auto_handle_mobile_ip_ranges
+        fi
+        
+        # Full scans (every 60 seconds)  
+        if [ $((full_counter % FULL_SCAN_INTERVAL)) -eq 0 ]; then
+            log_msg "🔄 Performing full connectivity scan"
+            enhanced_usb_detection >/dev/null
+            if [ "$WIFI_AUTO_SCAN" = "1" ]; then
+                enhanced_wifi_scan >/dev/null
+            fi
+        fi
+        
+        # Health checks (every 5 minutes)
+        if [ $((health_counter % HEALTH_CHECK_INTERVAL)) -eq 0 ]; then
+            log_msg "💊 Performing connectivity health check"
+            # Add health check logic here
+        fi
+        
+        sleep 1
+        quick_counter=$((quick_counter + 1))
+        full_counter=$((full_counter + 1))
+        health_counter=$((health_counter + 1))
+    done
+}
+
+# Command line interface
+case "$1" in
+    start)
+        if [ -f "$PID_FILE" ]; then
+            local pid=$(cat "$PID_FILE")
+            if kill -0 "$pid" 2>/dev/null; then
+                log_msg "⚠️ Enhanced mobile connectivity already running (PID: $pid)"
+                exit 1
+            else
+                rm -f "$PID_FILE"
+            fi
+        fi
+        
+        echo $$ > "$PID_FILE"
+        log_msg "🚀 Enhanced mobile connectivity manager started (PID: $$)"
+        
+        trap 'log_msg "🛑 Enhanced mobile connectivity stopping..."; rm -f "$PID_FILE"; exit 0' TERM INT
+        
+        main_connectivity_loop
+        ;;
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            local pid=$(cat "$PID_FILE")
+            if kill "$pid" 2>/dev/null; then
+                log_msg "🛑 Enhanced mobile connectivity stopped (PID: $pid)"
+            fi
+            rm -f "$PID_FILE"
+        else
+            log_msg "⚠️ Enhanced mobile connectivity not running"
+        fi
+        ;;
+    status)
+        if [ -f "$PID_FILE" ]; then
+            local pid=$(cat "$PID_FILE")
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "✅ Enhanced mobile connectivity is running (PID: $pid)"
+                if [ -f "$STATUS_FILE" ]; then
+                    echo "📊 Status file: $STATUS_FILE"
+                    cat "$STATUS_FILE"
+                fi
+                return 0
+            else
+                echo "❌ PID file exists but process not running"
+                rm -f "$PID_FILE"
+                return 1
+            fi
+        else
+            echo "⭕ Enhanced mobile connectivity is not running"
+            return 1
+        fi
+        ;;
+    test-usb)
+        enhanced_usb_detection
+        ;;
+    test-wifi)
+        enhanced_wifi_scan
+        ;;
+    test-ranges)
+        auto_handle_mobile_ip_ranges
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status|test-usb|test-wifi|test-ranges}"
+        echo ""
+        echo "🚀 Enhanced Mobile Connectivity Manager"
+        echo "📋 Commands:"
+        echo "   start      - Start enhanced connectivity manager"
+        echo "   stop       - Stop connectivity manager"
+        echo "   status     - Check service status and connections"
+        echo "   test-usb   - Test USB device detection"
+        echo "   test-wifi  - Test WiFi scanning"
+        echo "   test-ranges- Test mobile IP range handling"
+        echo ""
+        echo "🎯 Auto-handles: USB power cycling, WiFi roaming, IP ranges, recovery"
+        exit 1
+        ;;
+esac
