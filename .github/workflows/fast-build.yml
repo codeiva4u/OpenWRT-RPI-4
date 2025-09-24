@@ -272,19 +272,19 @@ jobs:
             fi
           done
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: openwrt-rpi4-$(date +"%Y%m%d-%H%M%S")-${{ github.run_id }}
-          name: "🚀 OpenWrt RPi4 Build - ${{ env.OPENWRT_VERSION }} ($(date +"%Y-%m-%d %H:%M"))"
+          tag_name: openwrt-rpi4-${{ github.run_number }}-${{ github.run_id }}
+          name: "🚀 OpenWrt RPi4 Build - ${{ env.OPENWRT_VERSION }}"
           body: |
             ## 🚀 Ultra-Fast OpenWrt Build for Raspberry Pi 4
             
             **OpenWrt Version**: `${{ env.OPENWRT_VERSION }}` (Latest Master Branch)  
-            **Build Date**: $(date +"%Y-%m-%d %H:%M:%S UTC")  
+            **Build Date**: `${{ github.event.head_commit.timestamp }}`  
             **Build ID**: `${{ github.run_id }}`  
             **Commit**: `${{ github.sha }}`
             
@@ -300,7 +300,7 @@ jobs:
             1. Download **`openwrt-rpi4-factory.img.gz`** (for fresh installations)
             2. Flash to SD card using Raspberry Pi Imager or Balena Etcher
             3. Insert SD card into Raspberry Pi 4 and power on
-            4. Access via http://192.168.2.1
+            4. Access via http://192.168.1.1
             
             ### 🔄 Upgrade:
             - Use **`openwrt-rpi4-sysupgrade.img.gz`** for upgrading existing OpenWrt installations
@@ -316,4 +316,4 @@ jobs:
             release/openwrt-rpi4-sysupgrade.img.gz
             release/build-info.txt
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

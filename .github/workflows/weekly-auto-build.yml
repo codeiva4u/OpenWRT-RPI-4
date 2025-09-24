@@ -245,11 +245,10 @@ jobs:
           fi
           
           # Create detailed build info
-          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
           cat > release/build-info.txt << EOF
           Weekly Auto-Build Information
           =============================
-          Build Date: $BUILD_DATE
+          Build Date: $(date +"%Y-%m-%d %H:%M:%S UTC")
           OpenWrt Version: ${{ needs.check-updates.outputs.openwrt_version }}
           OpenWrt Commit: ${{ needs.check-updates.outputs.new_commit }}
           Previous Commit: ${{ needs.check-updates.outputs.old_commit }}
@@ -277,16 +276,16 @@ jobs:
       - name: Create Weekly Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: weekly-$(date +"%Y%m%d")-${{ github.run_id }}
-          name: "📅 Weekly OpenWrt Build - ${{ needs.check-updates.outputs.openwrt_version }} ($(date +\"%Y-%m-%d\"))"
+          tag_name: weekly-${{ github.run_number }}-${{ github.run_id }}
+          name: "📅 Weekly OpenWrt Build - ${{ needs.check-updates.outputs.openwrt_version }}"
           body: |
             ## 📅 Weekly Automated OpenWrt Build
             
             🤖 **Auto-built** with latest OpenWrt updates from upstream
             
             **📦 OpenWrt Version**: `${{ needs.check-updates.outputs.openwrt_version }}`  
-            **🕒 Build Date**: $(date +"%Y-%m-%d %H:%M:%S UTC")  
-            **🆔 Build ID**: `${{ github.run_id }}`  
+            **🕒 Build Date**: `${{ github.event.head_commit.timestamp }}`  
+            **🆔 Build ID**: `${{ github.run_id }}`
             **📝 OpenWrt Commit**: `${{ needs.check-updates.outputs.new_commit }}`
 
             ### 🆕 What's New in This Build:
