@@ -21,7 +21,8 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
+  id-token: write
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
