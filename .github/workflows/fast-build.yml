@@ -1,20 +1,18 @@
 name: 🚀 Fast OpenWrt Build for Raspberry Pi 4 (Manual/Push)
 
 on:
-  # Auto trigger on push to main branch (except weekly auto-update commits)
+  # Auto trigger on push to main branch 
   push:
     branches:
       - main
-    # Trigger on any important file changes
+    # Trigger on any important file changes (excluding weekly auto-update commits)
     paths:
       - '.github/workflows/fast-build.yml'
       - '.config'
       - 'files/**'
       - '*.md'  # Documentation changes
       - 'scripts/**'  # Script changes
-    # Exclude weekly auto-update commits to avoid duplicate builds
-    paths-ignore:
-      - '.openwrt-commit'
+      # Note: .openwrt-commit changes won't trigger this workflow
 
   # Manual trigger with options
   workflow_dispatch:
@@ -60,7 +58,7 @@ jobs:
           && sudo apt update \
           && sudo apt install gh -y
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Enhanced caching strategy for maximum performance
       - name: Cache OpenWrt Source
