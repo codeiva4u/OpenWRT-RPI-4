@@ -48,9 +48,13 @@ jobs:
           
           # Get current commit from our build history (if any)
           OLD_COMMIT=""
-          if [ -f ".openwrt-commit" ]; then
-            OLD_COMMIT=$(cat .openwrt-commit)
-            echo "📋 Last built commit: $OLD_COMMIT"
+          if [ -f ".openwrt-commit" ] && [ -s ".openwrt-commit" ]; then
+            OLD_COMMIT=$(cat .openwrt-commit | grep -v '^#' | grep -v '^$' | head -1 | tr -d '\n\r')
+            if [ -n "$OLD_COMMIT" ]; then
+              echo "📋 Last built commit: $OLD_COMMIT"
+            else
+              echo "📋 Empty commit file, treating as first build"
+            fi
           else
             echo "📋 No previous build history found"
           fi
@@ -87,14 +91,21 @@ jobs:
             echo "ℹ️ No updates found, skipping build"
           fi
           
-          # Set outputs
+          # Set outputs (properly escaped for GitHub Actions)
           echo "has_updates=$HAS_UPDATES" >> $GITHUB_OUTPUT
           echo "old_commit=$OLD_COMMIT" >> $GITHUB_OUTPUT
           echo "new_commit=$NEW_COMMIT" >> $GITHUB_OUTPUT  
           echo "openwrt_version=$OPENWRT_VERSION" >> $GITHUB_OUTPUT
-          echo "update_summary<<EOF" >> $GITHUB_OUTPUT
-          echo "$UPDATE_SUMMARY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Multi-line output with proper delimiter
+          {
+            echo "update_summary<<UPDATEEOF"
+            echo "**Latest Commit:** \`$NEW_COMMIT\`"
+            echo "**Date:** $COMMIT_DATE"
+            echo "**Author:** $COMMIT_AUTHOR"
+            echo "**Message:** $COMMIT_MESSAGE"
+            echo "UPDATEEOF"
+          } >> $GITHUB_OUTPUT
 
   build:
     name: 🚀 Build Updated OpenWrt
