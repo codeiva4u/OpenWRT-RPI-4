@@ -1,0 +1,160 @@
+name: Manual Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: 'Release name'
+        required: true
+        default: 'Advanced OpenWRT RPI4'
+        type: string
+      release_tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+        type: string
+      description:
+        description: 'Release description'
+        required: false
+        default: '🚀 Advanced OpenWRT for Raspberry Pi 4 with Auto-Problem-Solving'
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: openwrt-23.05
+  TZ: Asia/Kolkata
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Initialize environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt update -y
+        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+          git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
+          mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
+          libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
+          vim wget xmlto xxd zlib1g-dev
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone OpenWRT source
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Load custom feeds
+      run: |
+        chmod +x diy-part1.sh
+        cd openwrt
+        $GITHUB_WORKSPACE/diy-part1.sh
+
+    - name: Update and install feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Load configuration and custom files
+      run: |
+        [ -e files ] && cp -r files openwrt/files
+        [ -e .config ] && cp .config openwrt/.config
+        chmod +x diy-part2.sh
+        cd openwrt
+        $GITHUB_WORKSPACE/diy-part2.sh
+
+    - name: Download packages
+      run: |
+        cd openwrt
+        make defconfig
+        # Ensure critical packages are selected
+        echo "CONFIG_PACKAGE_relayd=y" >> .config
+        echo "CONFIG_PACKAGE_bridge-utils=y" >> .config
+        echo "CONFIG_PACKAGE_ebtables=y" >> .config
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile firmware
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Organize firmware files
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Create release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.event.inputs.release_tag }}
+        name: ${{ github.event.inputs.release_name }}
+        body: |
+          ${{ github.event.inputs.description }}
+          
+          ## 🎯 Advanced OpenWRT Features:
+          - ✅ **Smart Bridge Auto-Handler** - WDS/relayd auto-detection
+          - ✅ **Enhanced Mobile Connectivity** - USB + WiFi auto-management
+          - ✅ **Universal Problem Solver** - Auto-fixes all issues
+          - ✅ **Mobile Hotspot Auto-Connection** - Priority-based WiFi
+          - ✅ **USB Tethering Auto-Detection** - All mobile devices
+          - ✅ **AdGuard Home Integration** - DNS ad-blocking
+          - ✅ **SD Card Auto-Resize** - Full capacity utilization
+          - ✅ **Zero Configuration Required** - Everything automatic
+          
+          ## 📱 Supported Devices:
+          - Raspberry Pi 4 (all variants)
+          - Android phones (USB + WiFi)
+          - iPhone/iPad (USB + WiFi)
+          - Windows Mobile devices
+          
+          ## 🚀 Installation:
+          1. Download the `.img` file
+          2. Flash to SD card using Raspberry Pi Imager
+          3. Boot Pi 4 and connect ethernet to router WAN
+          4. Everything else is automatic!
+          
+          **Built on:** $(date '+%Y-%m-%d %H:%M:%S') IST
+          **Commit:** ${{ github.sha }}
+        files: ${{ env.FIRMWARE }}/*
+        draft: false
+        prerelease: false
+        make_latest: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Clean up
+      run: |
+        cd openwrt
+        make clean
+        df -hT
