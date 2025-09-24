@@ -84,11 +84,19 @@ jobs:
     - name: Download packages
       run: |
         cd openwrt
-        make defconfig
-        # Ensure critical packages are selected
-        echo "CONFIG_PACKAGE_relayd=y" >> .config
-        echo "CONFIG_PACKAGE_bridge-utils=y" >> .config
-        echo "CONFIG_PACKAGE_ebtables=y" >> .config
+        # Verify and fix config file
+        echo "📋 Verifying .config syntax..."
+        if ! make defconfig; then
+          echo "🔧 Fixing config syntax errors..."
+          sed -i '/^[^C#]/d' .config
+          sed -i '/^$/d' .config
+          make defconfig
+        fi
+        
+        # Ensure critical packages
+        grep -q "CONFIG_PACKAGE_relayd=y" .config || echo "CONFIG_PACKAGE_relayd=y" >> .config
+        grep -q "CONFIG_PACKAGE_bridge-utils=y" .config || echo "CONFIG_PACKAGE_bridge-utils=y" >> .config
+        grep -q "CONFIG_PACKAGE_ebtables=y" .config || echo "CONFIG_PACKAGE_ebtables=y" >> .config
         make defconfig
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
@@ -104,8 +112,17 @@ jobs:
 
     - name: Organize firmware files
       run: |
-        cd openwrt/bin/targets/*/*
+        cd openwrt
+        TARGET_DIR=$(find bin/targets -name "*.img*" -o -name "*.bin" | head -1 | xargs dirname)
+        if [ -z "$TARGET_DIR" ]; then
+          echo "❌ No firmware found"
+          find bin -name "*.img*" -o -name "*.bin" || true
+          exit 1
+        fi
+        cd "$TARGET_DIR"
         rm -rf packages
+        echo "📦 Firmware ready: $PWD"
+        ls -la
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
     - name: Upload firmware artifacts
